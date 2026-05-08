@@ -680,7 +680,7 @@ A journal can mix entry lines in different currencies. The base currency is dete
 }
 ```
 
-The `exchangeRateBaseCurrency` tells the server which currency is "1 unit" in the rate expression. In this example `3.75` means `1 SAR = … ` — wait, let me re-express: `exchangeRateBaseCurrency: "SAR"` and `exchangeRate: 3.75` means 1 SAR buys 0.2667 USD, or equivalently 1 USD = 3.75 SAR. The server uses these to compute `baseAmount` for the line.
+The `exchangeRateBaseCurrency` tells the server which currency is "1 unit" in the rate expression. Setting `exchangeRateBaseCurrency: "SAR"` and `exchangeRate: 3.75` means 1 SAR = 3.75 USD — or equivalently, to get 1000 USD you spend 3750 SAR. The server uses these to compute `baseAmount` for the line.
 
 **Rules for exchange rates:**
 
