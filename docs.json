@@ -34,7 +34,8 @@
               "accounting-cycle-overview",
               "accounts",
               "cost-centers",
-              "journals"
+              "journals",
+              "balances"
             ]
           }
         ]

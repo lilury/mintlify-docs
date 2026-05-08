@@ -49,7 +49,7 @@ A posted entry's financial data — line amounts, account codes, dates, currency
 
 - You can only post a journal entry into a period that is currently **open**.
 - To correct a posted entry, reverse it and post a new one.
-- Reversing a posted entry in a **locked** period is not allowed — you must reopen the period first (see below).
+- You can reverse a posted entry from a **locked** or **closed** period, but the reversing entry must be posted into a currently **open** period.
 
 ---
 
@@ -75,40 +75,32 @@ Closing a period is a permanent, irreversible action. No entries can be posted i
 
 ## Month-end (period-end) closure
 
-The month-end process is the routine you run at the end of each accounting period to finalise that period's books. The typical sequence is:
+Lilury gives you two controls to finalise a period's books: **locking** and **closing**.
 
-1. **Post all remaining entries** — ensure every transaction for the period has been posted. Drafts that are not posted will be excluded from reports.
-2. **Reconcile** — compare ledger balances against bank statements, sub-ledgers, and other external sources. Investigate and resolve any discrepancies.
-3. **Lock the period** — once you are satisfied with the numbers, lock the period to prevent further postings while final review happens.
-4. **Final review and sign-off** — management or finance leadership reviews the period's reports.
-5. **Close the period** — after sign-off, close the period permanently. The books for that period are now sealed.
+**Locking** stops any new journal entries from being posted into the period. This is useful once you want to freeze postings while review is in progress. A locked period can be reopened at any time if a correction is needed.
 
-Repeating this process each month keeps the general ledger clean and makes year-end significantly easier.
+**Closing** permanently seals the period. It cannot be reopened after closing. Lilury does not enforce any prerequisites before you close a period — drafts may still exist, and reconciliation is outside the system. Closing is simply an irreversible signal that the period is finalised.
 
 ---
 
 ## Year-end closure
 
-When all periods of a financial year have been closed, you can perform the **financial year-end closure**. This step:
+When all periods of a financial year have been closed, you can perform the **financial year-end closure**. Lilury enforces two prerequisites before allowing this:
 
-- Marks the financial year itself as closed
-- Calculates the net profit or loss for the year (revenue minus expenses)
-- Transfers that net result to **retained earnings** (or the equivalent equity account) via an automatic closing entry
-- Resets income and expense account balances to zero, ready for the new year
+- **Temporary accounts must be zeroed** — all income and expense account balances for the year must be zero before closure is permitted. These accounts are typically zeroed by posting a closing entry that transfers the net profit or loss to retained earnings (or the equivalent equity account). Lilury can automatically generate this closing journal as a draft, which you can then review and post.
+- **A next open financial year must exist** — Lilury requires that a new financial year has already been created and is open before the current year can be closed. This ensures there is always an open period available to receive new entries.
 
-This closing entry is the accounting equivalent of "zeroing out" the profit and loss accounts so they start fresh in the next year. Balance sheet accounts (assets, liabilities, equity) carry their closing balances forward automatically.
+Once both conditions are met, closing the financial year marks it as permanently sealed. Balance sheet accounts (assets, liabilities, equity) carry their closing balances forward into the new year automatically.
 
 ---
 
 ## Opening the next financial year
 
-After closing the current year, you create the **next financial year** in Lilury. Lilury will:
+The next financial year must be created **before** closing the current one — Lilury enforces this as a prerequisite for year-end closure. When you create the new financial year, Lilury generates a new set of periods for it. The new year opens in the normal state and you can begin posting into it immediately.
 
-1. Generate a new set of periods for the new year
-2. Carry forward all balance sheet balances as opening balances in the new year
-3. Start income and expense account balances at zero (they were reset by the year-end closing entry)
+Balance carry-forward happens at the moment you **close the current year**, not when you create the next one. Once the year-end close is confirmed, Lilury automatically sets the opening balances for the new year: balance sheet account balances (assets, liabilities, equity) are carried forward, and income and expense account balances start at zero.
 
-The new financial year opens in the normal state, and the cycle begins again: post journals, lock and close periods month by month, and eventually close the year.
+The cycle then begins again: post journals, lock and close periods month by month, and eventually close the year.
 
 ---
 
@@ -120,6 +112,7 @@ Create financial year
        └─ Post journal entries (Draft → Posted; or Void if correction needed)
             └─ Month-end: reconcile → lock → review → close period
                  └─ (repeat for each period)
-                      └─ Year-end: close year → transfer net result to retained earnings
-                           └─ Open next financial year → carry forward balances → cycle repeats
+                      └─ Before year-end: create next financial year (required prerequisite)
+                           └─ Year-end: transfer net result to retained earnings → close year
+                                └─ Balances carried forward automatically → cycle repeats
 ```

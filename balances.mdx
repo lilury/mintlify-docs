@@ -1,0 +1,190 @@
+---
+title: "Balances"
+description: "How account and cost center balances work — per-period totals, multi-currency tracking, and year-end carry-forward"
+---
+
+# Balances
+
+Every account in Lilury maintains a running balance that is updated automatically whenever a journal is posted. Balances are tracked at two levels of granularity: by **accounting period** (monthly activity) and by **financial year** (opening anchor). Both levels support multiple currencies — an account that receives entries in several currencies holds a separate balance for each one.
+
+---
+
+## Period balance
+
+A period balance captures an account's activity within a single accounting period.
+
+| Concept | Description |
+| --- | --- |
+| **Debit total** | Sum of all debit amounts posted to this account in this period |
+| **Credit total** | Sum of all credit amounts posted to this account in this period |
+| **Closing balance** | The account's balance at the end of this period |
+
+### Closing balance formula
+
+The formula depends on whether the account's natural balance is a debit or a credit.
+
+**Debit accounts** (assets and expenses):
+
+```text
+closing = opening + debits − credits
+```
+
+**Credit accounts** (liabilities, equity, and revenue):
+
+```text
+closing = opening + credits − debits
+```
+
+The opening used in the calculation is the closing balance of the previous period. For the first period of the year, the opening comes from the year's opening balance (see [Year opening balance](#year-opening-balance) below).
+
+**Example — Cash account (asset, debit type):**
+
+| Period | Opening | Debits | Credits | Closing |
+| --- | --- | --- | --- | --- |
+| January | 0 | 5,000 | 2,000 | 3,000 |
+| February | 3,000 | 1,000 | 500 | 3,500 |
+| March | 3,500 | 0 | 1,000 | 2,500 |
+
+**Example — Sales Revenue account (revenue, credit type):**
+
+| Period | Opening | Debits | Credits | Closing |
+| --- | --- | --- | --- | --- |
+| January | 0 | 0 | 8,000 | 8,000 |
+| February | 8,000 | 500 | 3,000 | 10,500 |
+| March | 10,500 | 0 | 2,000 | 12,500 |
+
+### Posting into earlier periods
+
+If a journal is posted into an earlier period — say February — after March already has a closing balance, March's closing is automatically recalculated to stay consistent with the updated February closing. This cascade applies to all periods after the posting date within the same financial year.
+
+### Closed periods
+
+Once an accounting period is closed, its balances are frozen. No further postings can affect them. Reporting against a closed period always returns the same figures.
+
+---
+
+## Year opening balance
+
+Each financial year has an opening balance for every account. This is the account's balance on the first day of the year — the starting point from which the first period's closing balance is calculated.
+
+For a new company or a newly created account, the opening balance is zero. For all subsequent years, it is populated automatically during the year-end close (see [Year-end carry-forward](#year-end-carry-forward) below).
+
+---
+
+## Multi-currency balances
+
+An account can receive journal entries in different currencies. When this happens, Lilury tracks a **separate balance for each currency** in addition to the base-currency total. This lets you see both the converted base-currency figure and the original transaction-currency figure side by side in reports.
+
+**Example — a USD-base company with entries in multiple currencies on the same account:**
+
+```text
+Account: Cash  |  Period: January 2026  |  Base currency: USD
+
+Base currency (USD):
+  Debits:  7,200.00    Credits: 2,680.00    Closing: 4,520.00
+
+Original currencies:
+  USD  →  Debits: 5,000.00    Credits: 2,000.00    Closing: 3,000.00
+  EUR  →  Debits: 1,200.00    Credits:   500.00    Closing:   700.00
+  SAR  →  Debits:   800.00    Credits:     0.00    Closing:   800.00
+```
+
+The base-currency figures include everything, with each entry's amount converted using the exchange rate recorded on the journal line. The per-currency figures show only the activity in that specific currency, without conversion.
+
+The same pattern applies to the year opening balance: each currency that has appeared on the account throughout the year has its own opening figure.
+
+---
+
+## Year-end carry-forward
+
+When a financial year is closed, Lilury automatically sets the opening balances for the next financial year. The rule depends on the account's nature.
+
+### Permanent accounts — balance sheet
+
+Accounts with nature **Assets**, **Liabilities**, or **Equity** carry their closing balance forward. The closing balance of the last period in the closing year becomes the opening balance for the next year.
+
+```text
+Next year opening = this year's closing balance
+```
+
+**Example — Cash (asset):**
+
+```text
+2025, December closing:   12,500 USD
+          ↓
+2026, year opening:       12,500 USD
+2026, January opening:    12,500 USD
+```
+
+### Temporary accounts — income statement
+
+Accounts with nature **Revenue** or **Expenses** are reset to zero each year. They measure performance for a single period and are cleared into retained earnings through a closing journal at year-end.
+
+```text
+Next year opening = 0
+```
+
+**Example — Sales Revenue (revenue):**
+
+```text
+2025, December closing:  340,000 USD
+          ↓
+2026, year opening:            0 USD
+2026, January opening:         0 USD
+```
+
+### Multi-currency carry-forward
+
+Every currency that appeared on an account during the closing year is carried forward by the same rule:
+
+- **Permanent account:** each currency's closing balance becomes that currency's opening balance in the next year.
+- **Temporary account:** each currency's opening balance is set to zero.
+
+---
+
+## Cost center balances
+
+When a journal entry line includes a cost center, Lilury tracks a **separate parallel balance** for that account and cost center combination, in addition to the account-only total. The structure is identical: debit total, credit total, closing balance, per-currency breakdowns, and a year opening balance — all scoped to the specific account × cost center pair.
+
+**Example — Sales Revenue with two cost centers:**
+
+```text
+Period: January 2026  |  Account: Sales Revenue
+
+Account total (all cost centers combined):
+  Credits: 50,000    Closing: 50,000
+
+Cost center "North":
+  Credits: 30,000    Closing: 30,000
+
+Cost center "South":
+  Credits: 20,000    Closing: 20,000
+```
+
+The account-level total is always the aggregate across all cost centers. The per-cost-center figures let you analyse the contribution of each segment independently.
+
+Year-end carry-forward applies to cost center balances using the same permanent/temporary rule as account-only balances.
+
+---
+
+## Summary
+
+```text
+Financial year
+  │
+  ├── Year opening balance (per account, per currency)
+  │
+  └── Accounting periods
+        ├── Period 1  opening = year opening
+        │     └── debits, credits, closing  (per account, per currency)
+        │     └── same again per cost center
+        │
+        ├── Period 2  opening = Period 1 closing
+        │     └── ...
+        │
+        └── Last period  closing
+                  │
+                  └── year-end close
+                        ├── Permanent accounts → next year opening = closing
+                        └── Temporary accounts → next year opening = 0
+```
