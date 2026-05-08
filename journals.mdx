@@ -1,0 +1,737 @@
+---
+title: "Journals"
+description: "A full reference to the Journal object — its properties, entry lines, status lifecycle, multi-currency handling, and every operation"
+---
+
+# Journal
+
+A **journal** (also called a journal entry) is the unit of record in the general ledger. Every financial transaction is recorded as a journal: a set of debit and credit lines that must balance to zero. Journals move through a status lifecycle — from draft to posted — and support corrections through voiding, adjusting, and reversing.
+
+---
+
+## Object overview
+
+```json
+{
+  "id": "01924abc-...",
+  "serialNumber": "JE-00000042",
+  "number": "INV-2026-001",
+  "status": { "key": "Posted", "value": "Posted" },
+  "description": "Customer payment received",
+  "externalReferenceNumber": "REC-8821",
+  "metadata": { "invoiceId": "9f3a...", "region": "North" },
+  "amount": { "amount": 1500.00, "currency": "USD" },
+  "date": "2026-05-08T09:00:00Z",
+  "postingDate": "2026-05-08",
+  "version": 3012948201,
+  "createdAt": "2026-05-08T09:00:00Z",
+  "updatedAt": "2026-05-08T09:05:00Z",
+  "voidReason": null,
+  "voidedAt": null,
+  "reverseReason": null,
+  "reversedAt": null,
+  "reversedToSerial": null,
+  "reversalFromSerial": null,
+  "availableActions": [
+    { "key": "Adjust", "value": "Adjust" },
+    { "key": "Reverse", "value": "Reverse" }
+  ],
+  "entries": [ ... ]
+}
+```
+
+---
+
+## Properties
+
+### `id`
+
+**Type:** `string (UUID)`
+
+The unique identifier of the journal. Assigned by the server at creation.
+
+```json
+{ "id": "01924abc-4c8d-11ef-9b2a-0242ac130003" }
+```
+
+---
+
+### `serialNumber`
+
+**Type:** `string`
+
+A system-generated, immutable reference number assigned to every journal at creation. Serial numbers are unique per company, sequential, and never reused — even if a journal is voided.
+
+```json
+{ "serialNumber": "JE-00000042" }
+```
+
+`serialNumber` is read-only. You cannot set or change it. It is the stable identifier you use in audit trails, reversal tracking, and external references.
+
+---
+
+### `number`
+
+**Type:** `string | null`
+
+An optional user-assigned reference number. Useful for tying a journal to your own invoice, receipt, or voucher numbering scheme.
+
+```json
+{ "number": "INV-2026-001" }
+```
+
+- Maximum 100 characters.
+- Must be unique per company — no two journals under the same company can share the same `number`.
+- Can be set on creation or updated later on a draft journal (via Update) or on a posted journal (via Adjust).
+- `null` when not assigned.
+
+---
+
+### `status`
+
+**Type:** `object (KeyValueItem)`
+
+The current lifecycle state of the journal. Returned as a `{ key, value }` pair.
+
+| Key | Meaning |
+| --- | --- |
+| `Draft` | The journal has been saved but not posted. It has no effect on account balances. You can edit or void a draft freely. |
+| `Posted` | The journal has been committed to the ledger. It affects account balances and appears in financial reports. Entry lines are immutable. |
+| `Voided` | A draft journal that was cancelled before posting. It has no financial effect and cannot be changed further. |
+
+```json
+{ "status": { "key": "Draft", "value": "Draft" } }
+```
+
+See the [Status lifecycle](#status-lifecycle) section for the full set of transitions and allowed operations per status.
+
+---
+
+### `description`
+
+**Type:** `string | null`
+
+A free-text description of the journal. Maximum 500 characters.
+
+```json
+{ "description": "Monthly rent payment — May 2026" }
+```
+
+Depending on your company settings, a description may be **required** before a draft journal can be posted. If `RequireJournalDescription` is enabled for the company, attempting to post without a description returns `Journal_DescriptionRequired`.
+
+---
+
+### `externalReferenceNumber`
+
+**Type:** `string | null`
+
+An optional reference to an external document — such as a bank transaction ID, supplier invoice number, or payment gateway reference. Maximum 50 characters.
+
+```json
+{ "externalReferenceNumber": "BANK-TXN-20260508-001" }
+```
+
+Indexed for search. You can filter journals by this field using the `keyword` parameter on the list endpoint.
+
+---
+
+### `metadata`
+
+**Type:** `object (key-value map)`
+
+A dictionary of up to 16 custom key-value pairs for attaching arbitrary structured data to a journal. Keys are up to 50 characters; values are up to 200 characters.
+
+```json
+{
+  "metadata": {
+    "invoiceId": "9f3a2b1c-...",
+    "region": "North",
+    "approvedBy": "Ahmed"
+  }
+}
+```
+
+Metadata is searchable — the list endpoint supports a `metadataKeyword` filter that matches against keys and values. Both keys and values are trimmed of leading and trailing whitespace before storage.
+
+---
+
+### `amount`
+
+**Type:** `object (MoneyDto)`
+
+The total debit sum of the journal expressed in the company's base currency. Because a balanced journal has equal debits and credits, this also equals the total credit sum.
+
+```json
+{ "amount": { "amount": 1500.00, "currency": "USD" } }
+```
+
+`amount` is computed by the server from the entry lines and cannot be set directly. For multi-currency journals, all entry amounts are converted to the base currency before summing.
+
+---
+
+### `date`
+
+**Type:** `string (ISO 8601)`
+
+The logical date of the transaction. Defaults to the time the journal was created if not supplied.
+
+```json
+{ "date": "2026-05-08T09:00:00Z" }
+```
+
+- Must not be in the future (must be ≤ the current UTC time at the moment of the request).
+- This is the document date — distinct from `postingDate`, which is the date the journal was committed to an accounting period.
+
+---
+
+### `postingDate`
+
+**Type:** `string (date) | null`
+
+The date on which the journal was posted to an accounting period, in `YYYY-MM-DD` format. `null` while the journal is in `Draft` status.
+
+```json
+{ "postingDate": "2026-05-08" }
+```
+
+You supply this date when posting the journal. The server uses it to locate the matching open accounting period — the period whose date range covers this date. If no open period contains the date, the post fails with `Journal_NoPeriod`.
+
+`postingDate` is immutable once set. A posted journal cannot be re-posted to a different period; reverse it and post a corrected journal instead.
+
+---
+
+### `version`
+
+**Type:** `uint`
+
+The concurrency token. Include it verbatim in all write requests (Update, Post, Void, Adjust, Reverse) to prevent lost updates.
+
+```json
+{ "version": 3012948201 }
+```
+
+The server rejects a write if the version you send no longer matches, returning `409 Conflict`. Re-fetch the journal and retry.
+
+See [Concurrency](/concurrency) for details.
+
+---
+
+### `createdAt`
+
+**Type:** `string (ISO 8601)`
+
+The timestamp when the journal was created. Read-only, set by the server.
+
+---
+
+### `updatedAt`
+
+**Type:** `string (ISO 8601) | null`
+
+The timestamp of the most recent modification. `null` if the journal has never been changed after creation.
+
+---
+
+### `voidReason` / `voidedAt`
+
+**Type:** `string | null` / `string | null`
+
+`voidReason` is the reason text supplied when a draft journal was voided. `voidedAt` is the timestamp of the void. Both are `null` while the journal is not voided.
+
+```json
+{
+  "voidReason": "Entered in wrong period",
+  "voidedAt": "2026-05-08T10:30:00Z"
+}
+```
+
+---
+
+### `reverseReason` / `reversedAt`
+
+**Type:** `string | null` / `string | null`
+
+`reverseReason` is the reason text supplied when a posted journal was reversed. `reversedAt` is the timestamp of the reversal. Both are `null` on journals that have not been reversed.
+
+---
+
+### `reversedToSerial`
+
+**Type:** `string | null`
+
+On a journal that has been reversed, this holds the `serialNumber` of the **reversing journal** (the automatically created counter-entry). Use it to navigate from the original to its correction.
+
+```json
+{ "reversedToSerial": "JE-00000043" }
+```
+
+---
+
+### `reversalFromSerial`
+
+**Type:** `string | null`
+
+On a reversing journal, this holds the `serialNumber` of the **original journal** it was created to cancel. Use it to navigate from a reversal back to the entry it corrects.
+
+```json
+{ "reversalFromSerial": "JE-00000042" }
+```
+
+---
+
+### `availableActions`
+
+**Type:** `array of KeyValueItem`
+
+The operations currently available on this journal given its status. Returned in every response so your UI can enable or disable buttons without additional logic.
+
+| Status | Available actions |
+| --- | --- |
+| `Draft` | `Edit`, `Post`, `Void` |
+| `Posted` | `Adjust`, `Reverse` |
+| `Voided` | _(none)_ |
+
+```json
+{
+  "availableActions": [
+    { "key": "Adjust", "value": "Adjust" },
+    { "key": "Reverse", "value": "Reverse" }
+  ]
+}
+```
+
+---
+
+### `entries`
+
+**Type:** `array of Entry`
+
+The debit and credit lines that make up the journal. Every journal must have at least one debit entry and at least one credit entry, and the sum of all debits must equal the sum of all credits in the base currency.
+
+See the [Entry object](#entry-object) section below for a complete breakdown of each line's fields.
+
+---
+
+## Entry object
+
+Each element in the `entries` array represents one debit or credit line.
+
+```json
+{
+  "id": "a1b2c3d4-...",
+  "account": {
+    "id": "e3a2f1b0-...",
+    "name": "Cash",
+    "code": "1.1.1.01",
+    "currency": "USD"
+  },
+  "side": { "key": "Debit", "value": "Debit" },
+  "transactionAmount": { "amount": 1500.00, "currency": "USD" },
+  "baseAmount": { "amount": 1500.00, "currency": "USD" },
+  "exchangeRate": 1.0,
+  "exchangeRateBaseCurrency": "USD",
+  "order": 0,
+  "description": "Cash received from customer",
+  "costCenter": {
+    "id": "7f3c1a20-...",
+    "name": "Sales Department",
+    "code": "SALES"
+  }
+}
+```
+
+### `id`
+
+The unique identifier of the entry line. Assigned by the server.
+
+### `account`
+
+A summary of the account this line posts to. Contains `id`, `name` (localised), `code`, and `currency`.
+
+Only **non-category** accounts can receive entry lines. Posting to a category account returns `Journal_CategoryAccounts`.
+
+### `side`
+
+Whether this line is a `Debit` or `Credit`. Returned as a `{ key, value }` pair.
+
+### `transactionAmount`
+
+The amount and currency as entered. If the entry is in the company's base currency, `transactionAmount` and `baseAmount` are identical.
+
+```json
+{ "transactionAmount": { "amount": 1800000.00, "currency": "SYP" } }
+```
+
+### `baseAmount`
+
+The amount converted to the company's base currency using the supplied exchange rate. This is what contributes to the journal's total `amount` and to account balances.
+
+```json
+{ "baseAmount": { "amount": 1500.00, "currency": "USD" } }
+```
+
+### `exchangeRate` / `exchangeRateBaseCurrency`
+
+Used when the entry's transaction currency differs from the company's base currency.
+
+- `exchangeRate` — the rate applied to convert `transactionAmount` to `baseAmount`. Must be ≥ 1.
+- `exchangeRateBaseCurrency` — the currency that represents "1 unit" in the rate. For example, if the rate is `"1 USD = 12000 SYP"`, then `exchangeRateBaseCurrency` is `"USD"` and `exchangeRate` is `12000`.
+
+**Same-currency entries** (transaction currency == base currency): `exchangeRate` is `1` and `exchangeRateBaseCurrency` matches the base currency.
+
+**Cross-currency entries** (transaction currency ≠ base currency): both fields are required. `exchangeRateBaseCurrency` must be either the base currency or the transaction currency.
+
+```json
+{
+  "transactionAmount": { "amount": 1800000.00, "currency": "SYP" },
+  "baseAmount":        { "amount": 150.00,     "currency": "USD" },
+  "exchangeRate": 12000,
+  "exchangeRateBaseCurrency": "USD"
+}
+```
+
+### `order`
+
+The zero-based position of this entry in the journal's entry list. Lines are displayed in this order.
+
+### `description`
+
+An optional per-line description. Maximum 500 characters. Useful for distinguishing lines that post to the same account.
+
+### `costCenter`
+
+An optional cost center attached to this line, returned as `{ id, name, code }`. `null` when no cost center was assigned. The cost center must be active at the time the journal is created or updated.
+
+---
+
+## Status lifecycle
+
+Journals move through a fixed set of states. The allowed transitions are:
+
+```text
+        ┌──── Edit ────┐
+        ↓              │
+      Draft ──── Void ──→ Voided  (terminal)
+        │
+       Post
+        ↓
+      Posted ──── Adjust ──→ Posted
+        │
+      Reverse
+        ↓
+ New Draft journal (the reversing entry)
+```
+
+| From | Operation | To |
+| --- | --- | --- |
+| `Draft` | Post | `Posted` |
+| `Draft` | Void | `Voided` |
+| `Draft` | Edit (Update) | `Draft` |
+| `Posted` | Adjust | `Posted` |
+| `Posted` | Reverse | Original stays `Posted`; a new journal is created |
+| `Voided` | _(none)_ | — |
+
+---
+
+## Creating a journal
+
+**Minimum required fields:**
+
+```json
+{
+  "companyId": "...",
+  "date": "2026-05-08T09:00:00Z",
+  "entries": [
+    {
+      "accountId": "e3a2f1b0-...",
+      "side": "Debit",
+      "amount": 1500.00
+    },
+    {
+      "accountId": "d4b1e0a9-...",
+      "side": "Credit",
+      "amount": 1500.00
+    }
+  ]
+}
+```
+
+**With optional fields:**
+
+```json
+{
+  "companyId": "...",
+  "date": "2026-05-08T09:00:00Z",
+  "number": "INV-2026-001",
+  "description": "Customer payment received",
+  "externalReferenceNumber": "REC-8821",
+  "metadata": { "invoiceId": "9f3a..." },
+  "entries": [
+    {
+      "accountId": "e3a2f1b0-...",
+      "side": "Debit",
+      "amount": 1500.00,
+      "description": "Cash received",
+      "costCenterId": "7f3c1a20-..."
+    },
+    {
+      "accountId": "d4b1e0a9-...",
+      "side": "Credit",
+      "amount": 1500.00,
+      "description": "Revenue recognised"
+    }
+  ]
+}
+```
+
+The server returns the new journal's `id`, `serialNumber`, and `number`.
+
+**You can post immediately on creation** by including `postingDate` in the create request. The journal is created as a draft and then posted in the same operation.
+
+```json
+{
+  "companyId": "...",
+  "date": "2026-05-08T09:00:00Z",
+  "postingDate": "2026-05-08",
+  "entries": [ ... ]
+}
+```
+
+**Idempotency.** Create requests support the `Idempotency-Key` header to prevent duplicate journals on retried network requests. See [Idempotency](/idempotency).
+
+### Entry balancing rules
+
+- The sum of all debit `amount` values (in base currency) must equal the sum of all credit `amount` values.
+- You must have at least one debit entry and at least one credit entry.
+- An account cannot appear on both sides of the same journal — a single account cannot have both a debit and a credit line in the same journal.
+- Only leaf (non-category) accounts are allowed on entry lines.
+- Cost centers, if provided, must exist and be active.
+
+---
+
+## Updating a journal
+
+Only `Draft` journals can be updated. Pass the `id`, current `version`, and a full replacement set of entries and fields.
+
+```json
+{
+  "companyId": "...",
+  "id": "01924abc-...",
+  "date": "2026-05-08T09:00:00Z",
+  "description": "Customer payment — corrected amount",
+  "entries": [
+    {
+      "id": "a1b2c3d4-...",
+      "accountId": "e3a2f1b0-...",
+      "side": "Debit",
+      "amount": 2000.00
+    },
+    {
+      "accountId": "d4b1e0a9-...",
+      "side": "Credit",
+      "amount": 2000.00
+    }
+  ],
+  "version": 3012948201
+}
+```
+
+Pass the `id` of an existing entry line to update it in place. Omit `id` to add a new line. Lines from the previous version that are absent from the request are removed.
+
+The same balancing and validation rules from creation apply.
+
+---
+
+## Posting a journal
+
+Posting commits a `Draft` journal to the ledger and locks its entry lines.
+
+```json
+{
+  "companyId": "...",
+  "id": "01924abc-...",
+  "postingDate": "2026-05-08",
+  "version": 3012948201
+}
+```
+
+The `postingDate` must fall within an open accounting period. The server finds the period automatically — you do not specify a period ID.
+
+**Prerequisites before posting:**
+
+- Journal must be `Draft`.
+- `postingDate` must be within an open period.
+- Description must be present if the company requires it (`Journal_DescriptionRequired`).
+- Total amount must meet or exceed the company's minimum journal amount (`Journal_AmountBelowMinimum`).
+
+Once posted, the journal's entry lines are immutable. Balances are updated immediately.
+
+---
+
+## Voiding a journal
+
+Voiding permanently cancels a `Draft` journal. A reason is required.
+
+```json
+{
+  "companyId": "...",
+  "id": "01924abc-...",
+  "reason": "Created in error — wrong company",
+  "version": 3012948201
+}
+```
+
+A voided journal has no financial effect. It remains in the audit trail but cannot be edited, posted, or voided again. If you need to cancel a **posted** journal, use Reverse instead.
+
+---
+
+## Adjusting a journal
+
+Adjustment updates the non-financial metadata of a `Posted` journal without touching its entry lines or balances.
+
+Fields you can change via Adjust:
+
+| Field | Adjustable |
+| --- | --- |
+| `description` | Yes |
+| `number` | Yes |
+| `externalReferenceNumber` | Yes |
+| `metadata` | Yes |
+| `date` | Yes |
+| `entries` | No — immutable once posted |
+| `amount` | No — derived from entries |
+
+```json
+{
+  "companyId": "...",
+  "id": "01924abc-...",
+  "description": "Customer payment — corrected description",
+  "number": "INV-2026-001-R",
+  "externalReferenceNumber": "REC-8821-B",
+  "metadata": { "invoiceId": "9f3a...", "correctedBy": "Sara" },
+  "date": "2026-05-08T09:00:00Z",
+  "version": 3012948201
+}
+```
+
+Adjustment is blocked if the journal's posting period is closed and the company has `AutoLockPostedPeriods` enabled (`Journal_PeriodClosed`).
+
+---
+
+## Reversing a journal
+
+Reversing creates a new counter-journal that cancels the financial effect of a `Posted` journal. A reason is required.
+
+```json
+{
+  "companyId": "...",
+  "id": "01924abc-...",
+  "reason": "Posted to wrong period — reposting in correct period",
+  "version": 3012948201
+}
+```
+
+The server automatically creates a new journal with every debit and credit swapped. The response includes the `id` and `serialNumber` of the new reversing journal:
+
+```json
+{
+  "id": "02035bcd-...",
+  "serialNumber": "JE-00000043",
+  "number": null
+}
+```
+
+After reversal:
+
+- The original journal's `reversedToSerial` is set to the new journal's serial number.
+- The new journal's `reversalFromSerial` is set to the original's serial number.
+- The original journal remains `Posted` — it is not changed to any other status.
+- The new reversing journal starts as a `Draft`. You must post it separately.
+
+**Idempotency.** Reverse requests support the `Idempotency-Key` header to prevent duplicate reversals on retried requests.
+
+---
+
+## Multi-currency entries
+
+A journal can mix entry lines in different currencies. The base currency is determined by your company settings. Each line that is not in the base currency requires an exchange rate.
+
+**Example: paying a USD invoice when the base currency is SAR**
+
+```json
+{
+  "companyId": "...",
+  "date": "2026-05-08T09:00:00Z",
+  "entries": [
+    {
+      "accountId": "accounts-payable-id",
+      "side": "Debit",
+      "amount": 1000.00,
+      "currency": "USD",
+      "exchangeRate": 3.75,
+      "exchangeRateBaseCurrency": "SAR"
+    },
+    {
+      "accountId": "bank-sar-id",
+      "side": "Credit",
+      "amount": 3750.00
+    }
+  ]
+}
+```
+
+The `exchangeRateBaseCurrency` tells the server which currency is "1 unit" in the rate expression. In this example `3.75` means `1 SAR = … ` — wait, let me re-express: `exchangeRateBaseCurrency: "SAR"` and `exchangeRate: 3.75` means 1 SAR buys 0.2667 USD, or equivalently 1 USD = 3.75 SAR. The server uses these to compute `baseAmount` for the line.
+
+**Rules for exchange rates:**
+
+- If the entry currency equals the base currency, no exchange rate is needed.
+- If the entry currency differs from the base currency, both `exchangeRate` and `exchangeRateBaseCurrency` are required.
+- `exchangeRateBaseCurrency` must be either the base currency or the transaction currency.
+- `exchangeRate` must be ≥ 1.
+
+The journal total `amount` is always expressed in the base currency, computed by summing the `baseAmount` of all debit lines.
+
+---
+
+## Listing journals
+
+The list endpoint supports filtering by:
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `keyword` | `string` | Partial match on `serialNumber`, `number`, `description`, or `externalReferenceNumber` |
+| `statuses` | `array` | Filter by one or more statuses (`Draft`, `Posted`, `Voided`) |
+| `dateFrom` / `dateTo` | `datetime` | Filter by journal `date` range |
+| `amountFrom` / `amountTo` | `decimal` | Filter by total `amount` range |
+| `accountId` | `UUID` | Return only journals that contain a line posting to this account |
+| `metadataKeyword` | `string` | Partial match on any metadata key or value |
+
+Results are cursor-paginated. See [Pagination](/pagination) for details.
+
+---
+
+## Common errors
+
+| Error code | Meaning |
+| --- | --- |
+| `NotFound_Journal` | No journal with the given `id` exists under the company |
+| `Journal_MustBeDraft` | The operation (Update, Post, Void) requires the journal to be in Draft status |
+| `Journal_MustBePosted` | The operation (Adjust, Reverse) requires the journal to be in Posted status |
+| `Journal_SidesNotBalanced` | Debit total does not equal credit total |
+| `Journal_EmptyDebits` | No debit entry lines were provided |
+| `Journal_EmptyCredits` | No credit entry lines were provided |
+| `Journal_AccountsMissing` | One or more `accountId` values do not exist under the company |
+| `Journal_CategoryAccounts` | One or more entry lines reference a category account |
+| `Journal_CostCentersMissing` | One or more `costCenterId` values do not exist under the company |
+| `Journal_InactiveCostCenters` | One or more referenced cost centers are inactive |
+| `Journal_NoPeriod` | No open accounting period contains the `postingDate` |
+| `Journal_DescriptionRequired` | The company requires a description before posting |
+| `Journal_AmountBelowMinimum` | The journal total is below the company's minimum posting amount |
+| `Journal_NumberAlreadyExists` | The `number` value is already used by another journal in this company |
+| `Journal_PeriodClosed` | Adjustment blocked — the posting period is closed and auto-lock is enabled |
+| `Journal_ExchangeRateRequired` | An entry uses a non-base currency but no exchange rate was provided |
+| `Journal_ExchangeRateBaseCurrencyInvalid` | `exchangeRateBaseCurrency` is not the base currency or the entry's transaction currency |
+| `Entry_ExchangeRateBaseCurrencyRequired` | Entry currency differs from base currency but `exchangeRateBaseCurrency` is missing |
+| `Entry_ExchangeRateBaseCurrencyMustMatchBase` | Entry currency matches base currency but `exchangeRateBaseCurrency` differs from it |
+| `Entry_CurrencyNotAllowed` | The company does not permit this currency on entry lines for this account |
+| `NotFound_FinancialYear` | No financial year covers the `postingDate` |
