@@ -1,0 +1,393 @@
+---
+title: "Cost Center"
+description: "A full reference to the CostCenter object — its properties, hierarchy rules, active/inactive lifecycle, and constraints"
+---
+
+# Cost Center
+
+A **cost center** is an optional dimension you can attach to journal entry lines to track income and expenses by department, project, branch, or any other segment your organisation uses. Cost centers form a small tree — up to three levels deep — and can be activated or deactivated independently of being deleted.
+
+---
+
+## Object overview
+
+```json
+{
+  "id": "7f3c1a20-...",
+  "name": {
+    "arabic": "قسم المبيعات",
+    "english": "Sales Department"
+  },
+  "code": "SALES",
+  "path": "OPS.SALES",
+  "parentCostCenterId": "b2e9d4f1-...",
+  "parentCostCenter": {
+    "id": "b2e9d4f1-...",
+    "name": "Operations",
+    "path": "OPS"
+  },
+  "isActive": true,
+  "version": 2048391027,
+  "createdAt": "2026-01-15T09:00:00Z",
+  "updatedAt": "2026-03-10T14:22:00Z"
+}
+```
+
+---
+
+## Properties
+
+### `id`
+
+**Type:** `string (UUID)`
+
+The unique identifier of the cost center. Assigned by the server at creation. Use this value wherever the API requires a cost center reference (e.g. on journal entry lines).
+
+```json
+{ "id": "7f3c1a20-4b7e-11ef-9b2a-0242ac130004" }
+```
+
+---
+
+### `name`
+
+**Type:** `object`
+
+The display name of the cost center. `name` is a bilingual object:
+
+| Field | Required | Max length | Description |
+| --- | --- | --- | --- |
+| `arabic` | Yes | 255 | The Arabic name of the cost center |
+| `english` | No | 255 | The optional English name |
+
+```json
+{
+  "name": {
+    "arabic": "قسم المبيعات",
+    "english": "Sales Department"
+  }
+}
+```
+
+In list and dropdown responses, `name` is returned as a single localised string — the server picks the language based on the `Accept-Language` header. In `GetById` responses, the full bilingual object is returned.
+
+---
+
+### `code`
+
+**Type:** `string`
+
+A short identifier for the cost center. Codes can contain any characters and are at most 20 characters long.
+
+```json
+{ "code": "SALES" }
+```
+
+Unlike account codes, the `code` of a cost center is **unique across the entire company** — not just within a parent. No two cost centers under the same company can share the same code, regardless of where they sit in the tree.
+
+The `code` value is trimmed of leading and trailing whitespace before storage.
+
+```json
+{ "code": "MKT-EU" }
+```
+
+---
+
+### `path`
+
+**Type:** `string`
+
+The full hierarchical position of the cost center, expressed as the chain of codes from the root down to this cost center, separated by dots.
+
+```text
+OPS
+OPS.SALES
+OPS.SALES.ONLINE
+```
+
+`path` is computed by the server automatically — you never set it directly. It is recalculated whenever a cost center's `code` or `parentCostCenterId` changes, and all descendant paths are updated at the same time.
+
+**Example tree:**
+
+```text
+OPS              (path: "OPS")
+  OPS.SALES      (path: "OPS.SALES")
+    OPS.SALES.ONLINE   (path: "OPS.SALES.ONLINE")
+    OPS.SALES.RETAIL   (path: "OPS.SALES.RETAIL")
+  OPS.HR         (path: "OPS.HR")
+```
+
+Trailing dots are stripped in all responses — the path always ends at the cost center's own code.
+
+---
+
+### `isActive`
+
+**Type:** `boolean`
+
+Whether the cost center is currently active. Only active cost centers can be assigned to journal entry lines.
+
+| Value | Meaning |
+| --- | --- |
+| `true` | The cost center is active and can be used on journal entries |
+| `false` | The cost center is inactive and cannot be used on journal entries |
+
+```json
+{ "isActive": true }
+```
+
+All cost centers are created with `isActive: true`. You can toggle this state at any time using the dedicated **Activate** and **Deactivate** endpoints rather than through a general update.
+
+**Deactivation constraint.** A cost center cannot be deactivated while it has any active child cost centers. Deactivate the children first, then deactivate the parent.
+
+**Parent constraint.** A cost center cannot be created under, or moved to, an inactive parent. The parent must be active.
+
+---
+
+### `parentCostCenterId`
+
+**Type:** `string (UUID) | null`
+
+The `id` of this cost center's immediate parent. `null` for root-level cost centers.
+
+```json
+{ "parentCostCenterId": "b2e9d4f1-..." }
+```
+
+Pass this field on create or update to position the cost center in the tree. Omit it (or pass `null`) to make the cost center a root.
+
+---
+
+### `parentCostCenter`
+
+**Type:** `object | null`
+
+A summary of the immediate parent, returned in `GetById` responses. `null` for root-level cost centers.
+
+```json
+{
+  "parentCostCenter": {
+    "id": "b2e9d4f1-...",
+    "name": "Operations",
+    "path": "OPS"
+  }
+}
+```
+
+Contains `id`, `name` (localised string), and `path`. Not returned in list responses — use `parentCostCenterId` there to identify the parent.
+
+---
+
+### `version`
+
+**Type:** `uint`
+
+The concurrency token for this cost center. Include it verbatim in update, activate, deactivate, and delete requests to prevent lost updates.
+
+```json
+{ "version": 2048391027 }
+```
+
+The server rejects a write if the version you send no longer matches the current row, returning `409 Conflict`. Re-fetch the cost center and retry.
+
+See [Concurrency](/concurrency) for a full explanation.
+
+---
+
+### `createdAt`
+
+**Type:** `string (ISO 8601)`
+
+The timestamp when the cost center was created.
+
+```json
+{ "createdAt": "2026-01-15T09:00:00Z" }
+```
+
+Read-only, set by the server.
+
+---
+
+### `updatedAt`
+
+**Type:** `string (ISO 8601) | null`
+
+The timestamp of the most recent update to the cost center. `null` if the cost center has never been modified after creation.
+
+```json
+{ "updatedAt": "2026-03-10T14:22:00Z" }
+```
+
+Read-only, set by the server on every successful write.
+
+---
+
+## Hierarchy rules
+
+Cost centers form a tree with a maximum depth of **three levels**.
+
+```text
+Level 1 (root)
+  Level 2
+    Level 3   ← maximum depth
+```
+
+**Example:**
+
+```text
+CORP            ← Level 1 (root, no parent)
+  CORP.OPS      ← Level 2
+    CORP.OPS.IT ← Level 3 (maximum depth, cannot have children)
+```
+
+**Parent must be active.** You cannot create a cost center under, or move a cost center to, a parent with `isActive: false`.
+
+**No circular references.** A cost center cannot be set as a child of itself (`CostCenter_CircularSelf`) or of any of its own descendants (`CostCenter_CircularDescendant`). The server detects both cases and rejects the request.
+
+**Code is company-wide unique.** Even within a hierarchy, no two cost centers under the same company can share a `code`. Codes must be unique across all levels.
+
+---
+
+## Creating a cost center
+
+**Minimum required fields:**
+
+```json
+{
+  "companyId": "...",
+  "name": {
+    "arabic": "العمليات"
+  },
+  "code": "OPS"
+}
+```
+
+**With optional fields:**
+
+```json
+{
+  "companyId": "...",
+  "parentCostCenterId": "b2e9d4f1-...",
+  "name": {
+    "arabic": "قسم المبيعات",
+    "english": "Sales Department"
+  },
+  "code": "SALES"
+}
+```
+
+The server returns the `id` of the newly created cost center.
+
+All cost centers start as `isActive: true`. There is no way to create an inactive cost center — create it and then immediately deactivate it if needed.
+
+**Idempotency.** Create requests support the `Idempotency-Key` header to avoid duplicate creation on retried requests. See [Idempotency](/idempotency).
+
+---
+
+## Updating a cost center
+
+Pass the `id`, current `version`, and all fields (including ones you are not changing):
+
+```json
+{
+  "companyId": "...",
+  "name": {
+    "arabic": "قسم المبيعات - أوروبا",
+    "english": "Sales Department - Europe"
+  },
+  "code": "SALES-EU",
+  "parentCostCenterId": "b2e9d4f1-...",
+  "isActive": true,
+  "version": 2048391027
+}
+```
+
+A successful update returns `204 No Content`. The new `version` is not returned inline — re-fetch the resource if you need the updated version token.
+
+**Moving a cost center.** Changing `parentCostCenterId` repositions the cost center (and all its descendants) in the tree. All descendant `path` values are recomputed automatically. Moving is subject to the same depth and circular-reference checks as creation.
+
+---
+
+## Activating and deactivating
+
+Activation state is managed through two dedicated endpoints rather than through the general update endpoint.
+
+### Deactivate
+
+Marks the cost center as inactive. It can no longer be assigned to new journal entry lines.
+
+```json
+{ "version": 2048391027 }
+```
+
+- Fails with `CostCenter_AlreadyInactive` if already inactive.
+- Fails with `CostCenter_HasActiveChildren` if the cost center has any active child cost centers. Deactivate the children first.
+
+### Activate
+
+Marks the cost center as active again.
+
+```json
+{ "version": 2048391029 }
+```
+
+- Fails with `CostCenter_AlreadyActive` if already active.
+
+Both operations advance the `version`. Re-fetch if you need the updated token.
+
+---
+
+## Deleting a cost center
+
+Pass the `id`, `companyId`, and current `version`:
+
+```json
+{
+  "companyId": "...",
+  "version": 2048391027
+}
+```
+
+Deletion is permanent. It fails if:
+
+- The cost center has any child cost centers (active or inactive) — `CostCenter_HasChildren`
+- Any journal entry line references this cost center — `CostCenter_HasEntries`
+
+Unlike accounts, there are no default system cost centers — all cost centers are user-created and can therefore be deleted as long as the above constraints are met.
+
+---
+
+## Filtering and listing
+
+The list endpoint supports the following filters:
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `keyword` | `string` | Partial match against the Arabic name, English name, code, or path |
+| `parentCostCenterId` | `UUID` | Return only direct children of the given cost center |
+| `isActive` | `boolean` | Filter by active status; omit to return both active and inactive |
+
+The dropdown endpoint returns a lighter projection and accepts a single filter:
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `includeInactive` | `boolean` | When `true`, includes inactive cost centers; defaults to active only |
+
+---
+
+## Common errors
+
+| Error code | Meaning |
+| --- | --- |
+| `NotFound_CostCenter` | No cost center with the given `id` exists under the company |
+| `NotFound_ParentCostCenter` | The `parentCostCenterId` does not exist under the company |
+| `CostCenter_DuplicateCode` | Another cost center in the company already uses this `code` |
+| `CostCenter_ParentInactive` | The parent cost center is inactive; activate it first |
+| `CostCenter_MaxDepthExceeded` | Adding this cost center would exceed the 3-level depth limit |
+| `CostCenter_HasActiveChildren` | Deactivation blocked — one or more active children exist |
+| `CostCenter_CircularSelf` | `parentCostCenterId` points to the cost center itself |
+| `CostCenter_CircularDescendant` | `parentCostCenterId` points to a descendant of this cost center |
+| `CostCenter_HasChildren` | Deletion blocked — one or more child cost centers exist |
+| `CostCenter_HasEntries` | Deletion blocked — journal entry lines reference this cost center |
+| `CostCenter_AlreadyInactive` | Deactivation failed — cost center is already inactive |
+| `CostCenter_AlreadyActive` | Activation failed — cost center is already active |
