@@ -1,0 +1,214 @@
+---
+title: "Idempotency"
+description: "How to make safe retries with idempotent requests on the Lilury API"
+---
+
+# Idempotency
+
+Networks fail. Clients time out. Retrying a failed request is the right thing to do — but retrying a request that already succeeded can create duplicate data. Idempotency solves this.
+
+---
+
+## What idempotency means
+
+An idempotent request is one you can send multiple times and get the same outcome as if you sent it once. The second send does not create a second record — it returns the result of the first.
+
+This matters most for write operations (creating or modifying data). A journal created twice is an accounting error. Idempotency lets your retry logic be simple and aggressive without risk.
+
+---
+
+## The `Idempotency-Key` header
+
+To make a request idempotent, include an `Idempotency-Key` header:
+
+```bash
+curl -X POST https://api.lilury.com/api/v1/Companies/{companyId}/Journals \
+  -H "Authorization: Bearer eyJ..." \
+  -H "Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "Content-Type: application/json" \
+  -d '{ ... }'
+```
+
+The key can be any string up to a reasonable length. A UUID v4 is the standard choice — generate one per logical operation before you send the first attempt.
+
+**The key is scoped to your company and the operation type.** The same key used for a journal create and a journal update does not conflict.
+
+---
+
+## What happens on retry
+
+| Scenario | What the API does |
+| --- | --- |
+| First request succeeds, you retry with the same key | Returns the original `200` response, operation not repeated |
+| First request is still in progress, you retry | Returns `409 Conflict` — wait and retry again |
+| First request failed with a `4xx` error | Not cached — you may retry with the same key |
+| No key provided | Request is not idempotent, normal behavior |
+
+If the first request returned an error (validation failure, business rule violation, etc.), that result is **not** cached. You can fix the request and retry with the same key — or use a new key.
+
+If the first request succeeded, retrying returns the stored `200` response immediately without touching the database again. You will see the same `id`, `serialNumber`, and any other fields from the original response.
+
+---
+
+## Which endpoints support idempotency
+
+| Endpoint | Supported |
+| --- | --- |
+| `POST /Companies` — create a company | Yes |
+| `POST /Companies/{companyId}/Accounts` — create an account | Yes |
+| `POST /Companies/{companyId}/CostCenters` — create a cost center | Yes |
+| `POST /Companies/{companyId}/FinancialYears` — create a financial year | Yes |
+| `POST /Companies/{companyId}/Journals` — create a journal | Yes |
+| `PUT /Companies/{companyId}/Journals/{id}` — update a journal | Yes |
+| `POST /Companies/{companyId}/Journals/{id}/Reverse` — reverse a journal | Yes |
+| `POST /Companies/{companyId}/FinancialYears/{id}/GenerateClosingJournal` — generate closing journal | Yes |
+| `PUT /Companies/{companyId}/FinancialYears/{id}/Close` — close a financial year | Yes |
+| `PUT /Companies/{companyId}/FinancialYears/.../Periods/{id}/Close` — close a period | Yes |
+
+Read endpoints (GET) are naturally idempotent and do not use this header.
+
+---
+
+## Key lifetime
+
+Idempotency keys expire **24 hours** after the first request is received. The clock starts when the server first sees the key, regardless of whether that request succeeded or failed.
+
+After expiry, a request with the same key is treated as a brand new request — the server has no memory of it.
+
+Generate a fresh key for each new logical operation. Do not reuse a key across different operations even after its window expires.
+
+---
+
+## Technical reference
+
+### Key format and constraints
+
+| Property | Value |
+| --- | --- |
+| Maximum length | 255 characters |
+| Allowed characters | Any UTF-8 string |
+| Case sensitivity | Case-sensitive — `ABC` and `abc` are different keys |
+| TTL | 24 hours from first receipt |
+| Scope | Per company \+ per operation type |
+
+### Scope
+
+The key is scoped to a **company and operation type**. The triple `(companyId, operationType, key)` must be unique. This means:
+
+- The same key string used for `POST /Journals` and `POST /FinancialYears` does **not** conflict — they are different operation types.
+- The same key string used under company A and company B does **not** conflict — they are different companies.
+- For `POST /Companies` (company creation), the key is scoped to the **authenticated user** rather than a company, since no company exists at that point.
+
+### How the server enforces uniqueness
+
+Token creation uses a database-level unique constraint. If two requests with the same key arrive simultaneously, only one can insert the token — the other receives a `409 Conflict` immediately. This guarantee holds even under high concurrency without any client-side coordination.
+
+### What gets cached
+
+Only successful `200` responses are stored. The full response body is serialized and held for the TTL window.
+
+For endpoints that return no body (closing a financial year or a period), the server stores an internal sentinel on success. Retries for these endpoints return `200` with an empty body — the same as the original response.
+
+Error responses (`4xx`, `5xx`) are never cached. The token is discarded on failure, so the same key can be retried with a corrected request.
+
+---
+
+## Choosing a key
+
+The key must uniquely identify one logical operation. A UUID v4 generated at the point of user intent is the simplest and safest choice:
+
+```js
+const idempotencyKey = crypto.randomUUID(); // "550e8400-e29b-41d4-a716-446655440000"
+```
+
+```python
+import uuid
+idempotency_key = str(uuid.uuid4())  # "550e8400-e29b-41d4-a716-446655440000"
+```
+
+Store the key alongside the pending operation so you can reuse it on retry. Generate a new key only when the user initiates a new distinct operation.
+
+---
+
+## Handling a `409` response
+
+A `409` means a request with your key is currently in flight on the server — the first attempt has not completed yet. This is transient. Wait briefly and retry:
+
+```json
+{
+  "status": 409,
+  "errors": [
+    {
+      "name": "generalErrors",
+      "reason": "a request with this idempotency key is already in progress",
+      "code": "Conflict"
+    }
+  ]
+}
+```
+
+A simple retry strategy:
+
+1. Receive `409`
+2. Wait 1–2 seconds
+3. Resend with the same key and body
+4. Repeat until you get a non-`409` response
+
+Once the original request finishes (success or error), the next retry will return that result.
+
+---
+
+## Retry strategy
+
+A safe pattern for any write request:
+
+1. Generate a key before the first attempt.
+2. Store the key locally (in memory, in a job queue, etc.) so you can reuse it.
+3. Send the request.
+4. On network error or `5xx`: wait with exponential backoff and retry with the **same key**.
+5. On `409`: wait 1–2 seconds and retry with the **same key**.
+6. On `4xx` (except `409`): do not retry automatically — the request was rejected, fix it first.
+7. On `200`: the operation succeeded. Discard the key.
+
+```js
+async function createJournalIdempotent(companyId, payload, token) {
+  const key = crypto.randomUUID();
+  const maxAttempts = 5;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const res = await fetch(
+      `https://api.lilury.com/api/v1/Companies/${companyId}/Journals`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": key,
+        },
+        body: JSON.stringify(payload),
+      }
+    );
+
+    if (res.ok) return res.json();
+
+    const body = await res.json().catch(() => null);
+    const isConflict = res.status === 409;
+    const isServerError = res.status >= 500;
+
+    if (!isConflict && !isServerError) throw Object.assign(new Error("Request failed"), { status: res.status, body });
+
+    const delay = isConflict ? 1500 : Math.min(1000 * 2 ** attempt, 16000);
+    await new Promise((r) => setTimeout(r, delay));
+  }
+
+  throw new Error("Max retry attempts reached");
+}
+```
+
+---
+
+## Important rules
+
+- **Never change the request body between retries.** If the body changes, the key is meaningless — the server will return the response from the original body. Use a new key for a new request.
+- **Keys are per operation, not per session.** Do not reuse a key for two different journals or two different operations.
+- **Keys are per company.** A key used under company A and company B are independent — they do not conflict.

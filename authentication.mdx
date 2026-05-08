@@ -1,0 +1,214 @@
+---
+title: "Authentication"
+description: "How to authenticate requests to the Lilury API"
+---
+
+# Authentication
+
+The Lilury API supports two authentication methods:
+
+- **OAuth2 (user login)** — for apps where a real person logs in interactively
+- **API keys** — for automated scripts and server-to-server integrations with no human present
+
+---
+
+## OAuth2 — user authentication
+
+### How it works
+
+Lilury uses the **OAuth2 Authorization Code flow with PKCE**. If you haven't seen this before, here is the idea in plain terms:
+
+1. Your app asks Lilury to start a login — Lilury gives you a URL to send the user to.
+2. The user logs in on Lilury's login page (your app never sees their password).
+3. After login, Lilury redirects the user back to your app with a short-lived `code`.
+4. Your app exchanges that `code` for an **access token** and a **refresh token**.
+5. You use the access token on every API request. When it expires, you use the refresh token to get a new one silently.
+
+The PKCE part is a security mechanism that Lilury handles on your behalf — you don't need to implement it yourself.
+
+---
+
+### Step 1 — Start the login
+
+Call this endpoint to get a login URL:
+
+```bash
+curl "https://api.lilury.com/api/Authentication/Login"
+```
+
+If you already know the user's email, pass it to pre-fill the login form:
+
+```bash
+curl "https://api.lilury.com/api/Authentication/Login?email=user@example.com"
+```
+
+**Response:**
+
+```json
+{
+  "redirectTo": "https://auth.lilury.com/..."
+}
+```
+
+Redirect your user's browser to the `redirectTo` URL. They will see the Lilury login page.
+
+---
+
+### Step 2 — Handle the callback
+
+After the user logs in, Lilury redirects their browser back to your registered redirect URI with a `code` in the query string:
+
+```text
+https://yourapp.com/callback?code=abc123...
+```
+
+Exchange that code for tokens by calling:
+
+```bash
+curl "https://api.lilury.com/api/Authentication/Login/Callback?code=abc123..."
+```
+
+**Response:**
+
+```json
+{
+  "access_token": "eyJ...",
+  "refresh_token": "eyJ...",
+  "expires_in": 300,
+  "refresh_expires_in": 1800,
+  "token_type": "Bearer",
+  "companies": [
+    {
+      "companyId": "01924abc-...",
+      "roleId": "01924def-...",
+      "permissions": ["journals:read", "journals:create", "reports:read"]
+    }
+  ]
+}
+```
+
+The `companies` array tells you which companies this user belongs to and exactly what they are allowed to do in each one. Store this alongside the tokens — you'll use it to know which `companyId` to include in API requests.
+
+---
+
+### Step 3 — Make authenticated requests
+
+Pass the `access_token` as a `Bearer` token on every request:
+
+```bash
+curl https://api.lilury.com/api/Companies/{companyId}/Journals \
+  -H "Authorization: Bearer eyJ..."
+```
+
+---
+
+### Refresh tokens
+
+Access tokens are **short-lived** (the `expires_in` field tells you how many seconds). When one expires, requests will return `401 Unauthorized`. Instead of sending the user through the login flow again, use the refresh token to get a new access token silently.
+
+```bash
+curl -X POST https://api.lilury.com/api/Authentication/Refresh \
+  -H "Content-Type: application/json" \
+  -d '{ "refreshToken": "eyJ..." }'
+```
+
+**Response:** same shape as the login callback — a fresh `access_token`, a new `refresh_token`, and the updated `companies` list.
+
+A few things to know about refresh tokens:
+
+- **They also expire** — the `refresh_expires_in` field tells you how long. If the refresh token expires, the user must log in again.
+- **They are single-use** — each refresh call returns a new refresh token. Discard the old one.
+- **Store them securely** — treat them like passwords. In a browser, store them in an `HttpOnly` cookie, not `localStorage`.
+
+A typical implementation checks the token expiry before each API call and refreshes proactively a few seconds before it expires, rather than waiting for a `401`.
+
+---
+
+## API keys
+
+API keys are for automated processes — cron jobs, CI pipelines, backend services — where there is no interactive user session.
+
+### Key difference: company-scoped vs user-scoped
+
+This is the most important distinction between the two auth methods:
+
+- **OAuth2 tokens** are **user-scoped**. They represent a specific person and carry all the permissions that person has across all their companies. The user's identity is central.
+- **API keys** are **company-scoped**. A key belongs to one specific company and only works within that company. It carries a fixed set of permissions you choose at creation time, independent of any individual user.
+
+This makes API keys predictable for integrations — they don't break if a user's role changes or the user leaves the company.
+
+### Key format
+
+Every API key starts with `sk-lry_` so it is easy to spot in logs and caught by secrets scanners.
+
+```text
+sk-lry_Ab1Cd2Ef3Gh4Ij5Kl6Mn7Op8Qr9St0Uv1Wx2Yz3...
+```
+
+### How to use a key
+
+Pass it exactly like an access token:
+
+```bash
+curl https://api.lilury.com/api/Companies/{companyId}/Journals \
+  -H "Authorization: Bearer sk-lry_Ab1Cd2Ef..."
+```
+
+### The key is shown only once
+
+When you create an API key, the full key is returned once and never stored by Lilury. If you lose it, you need to create a new one. Store it in a secrets manager or environment variable — never in source code.
+
+---
+
+## API key options
+
+When creating an API key you configure three things:
+
+### Permissions
+
+You choose exactly which actions the key can perform. This limits the blast radius if a key is ever leaked — a read-only key cannot create or delete anything.
+
+Permissions follow a `resource:action` format:
+
+| Permission | What it allows |
+| --- | --- |
+| `journals:read` | Read journal entries |
+| `journals:create` | Create new journal entries |
+| `journals:update` | Edit existing journal entries |
+| `journals:post` | Post (finalize) journal entries |
+| `journals:void` | Void journal entries |
+| `accounts:read` | Read the chart of accounts |
+| `accounts:create` | Create accounts |
+| `accounts:update` | Edit accounts |
+| `accounts:delete` | Delete accounts |
+| `reports:read` | Generate and read reports |
+| `financial-years:read` | Read financial years |
+| `financial-years:create` | Create financial years |
+| `cost-centers:read` | Read cost centers |
+| `cost-centers:create` | Create cost centers |
+
+A key can only be granted permissions that the user creating it already has — you cannot use an API key to escalate your own privileges.
+
+### IP allowlist
+
+You can lock a key to specific IP addresses. If the allowlist is non-empty, requests from any other IP are rejected — even with a valid key. Useful when your server has a fixed outbound IP.
+
+Leave the allowlist empty to allow requests from any IP.
+
+### Expiry
+
+You can set an optional expiry date. After that date the key stops working automatically. Useful for short-lived integrations or to enforce periodic key rotation.
+
+Leave expiry unset for a key that stays active until you manually revoke it.
+
+---
+
+## Comparison
+
+|  | OAuth2 | API key |
+| --- | --- | --- |
+| Scope | User (all their companies) | One specific company |
+| Lifetime | Short-lived, refreshable | Long-lived, until revoked |
+| Permissions | Everything the user can do | A fixed subset you define |
+| Best for | Interactive apps | Automated integrations |
+| Survives user role change | No | Yes |

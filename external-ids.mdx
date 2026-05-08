@@ -1,0 +1,107 @@
+---
+title: "External IDs"
+description: "How to identify accounts and cost centers using your own codes instead of Lilury's system UUIDs"
+---
+
+# External IDs
+
+Every resource in Lilury has a system-generated UUID as its primary identifier. For accounts and cost centers, Lilury also supports identifying resources by a human-readable **code path** that you define. This lets you reference resources directly by the codes you already use in your system, without needing to look up or store UUIDs.
+
+---
+
+## How code paths work
+
+Every account and cost center has a `code` you assign when creating it. Lilury automatically computes a `path` from that code — a dot-joined chain of codes from the root of the hierarchy down to the resource itself.
+
+### Accounts
+
+```text
+1          (Assets)
+└── 1001   (Current Assets)
+    └── 10011  (Cash)
+```
+
+The `path` for the Cash account is `1.1001.10011`.
+
+### Cost centers
+
+```text
+SALES         (Sales Department)
+└── SALES-EU  (European Sales)
+```
+
+The `path` for European Sales is `SALES.SALES-EU`.
+
+The `path` is returned on every account and cost center response, alongside the UUID. It updates automatically if the hierarchy changes.
+
+---
+
+## Using external IDs in journal entries
+
+When creating or updating a journal, every entry line has an `accountId` and an optional `costCenterId`. Both fields accept **either** a UUID or a path string. If the value cannot be parsed as a UUID, Lilury treats it as a path and resolves it to the matching resource for your company.
+
+```json
+{
+  "date": "2025-03-15T00:00:00Z",
+  "entries": [
+    {
+      "accountId": "1.1001.10011",
+      "side": 1,
+      "amount": 500,
+      "costCenterId": "SALES.SALES-EU"
+    },
+    {
+      "accountId": "0196f3b2-1234-7000-abcd-ef0123456789",
+      "side": 2,
+      "amount": 500
+    }
+  ]
+}
+```
+
+UUID and path references can be mixed freely in the same request. Lilury resolves all paths server-side before writing anything — what gets stored is always the canonical UUID.
+
+---
+
+## Fetching external IDs
+
+To discover the path for an account or cost center, call the list or get-by-ID endpoint. The `path` field is always present in the response.
+
+```bash
+# Get a specific account
+curl "https://api.lilury.com/api/v1/Companies/{companyId}/Accounts/{id}" \
+  -H "Authorization: Bearer eyJ..."
+```
+
+```json
+{
+  "id": "0196f3b2-...",
+  "code": "10011",
+  "path": "1.1001.10011",
+  "name": { "arabic": "نقدية", "english": "Cash" },
+  ...
+}
+```
+
+---
+
+## Validation
+
+Using a path does not bypass any validation. The same rules apply regardless of how you identify the resource:
+
+- The account or cost center must belong to the same company.
+- The account must not be a category account (only leaf accounts can be used in entries).
+- The cost center must be active.
+
+If the path does not match any resource in your company, the request fails with a `404 Not Found` error.
+
+---
+
+## When to use paths vs UUIDs
+
+| Situation | Recommendation |
+| --- | --- |
+| You defined the chart of accounts and already know the codes | Use paths — no UUID lookup needed |
+| You are importing data from a system that uses these same codes | Use paths to map directly |
+| You received UUIDs from a previous API response | Use UUIDs |
+| You are building a UI where the user picks accounts from a list | Store and use UUIDs from the list response |

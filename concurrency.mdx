@@ -1,0 +1,203 @@
+---
+title: "Concurrency"
+description: "How the Lilury API uses optimistic locking to prevent lost updates, and how to work with the version field"
+---
+
+# Concurrency
+
+When two clients read the same record and then both try to write it, one of them will be working from stale data. Without concurrency control, the second write silently overwrites the first — a "lost update." The Lilury API prevents this with **optimistic locking**.
+
+---
+
+## How it works
+
+Every resource that can be mutated carries a `version` field in its GET and list responses. This field is a `uint` that advances every time the row is modified.
+
+When you send a write request, you include the `version` you last read. The API uses that value as a condition on the underlying `UPDATE`:
+
+- If the row has been modified since you read it, the version no longer matches. The update affects zero rows, and the API returns `409 Conflict`.
+- If no other writer has touched the row, the version matches, the update succeeds, and the response includes a fresh `version` you can use for the next write.
+
+---
+
+## The `version` field
+
+### In responses
+
+Every resource that requires a version on writes includes `version` in its read responses:
+
+```json
+{
+  "id": "01924abc-...",
+  "name": "Sales Revenue",
+  "version": 3829174102,
+  ...
+}
+```
+
+The value is an opaque `uint`. Treat it as a token — do not interpret or compare it; only store it and echo it back verbatim on writes.
+
+### In write requests
+
+Pass `version` in the request body alongside the other fields:
+
+```json
+{
+  "version": 3829174102,
+  "name": "Sales Revenue (Updated)",
+  ...
+}
+```
+
+---
+
+## Endpoints that require `version`
+
+All write endpoints that modify an existing record require a `version` field. Create endpoints (which insert a new row) do not.
+
+| Endpoint | Operation |
+| --- | --- |
+| `PUT /Companies/{companyId}/Accounts/{id}` | Update an account |
+| `DELETE /Companies/{companyId}/Accounts/{id}` | Delete an account |
+| `PUT /Companies/{companyId}/CostCenters/{id}` | Update a cost center |
+| `POST /Companies/{companyId}/CostCenters/{id}/Activate` | Activate a cost center |
+| `POST /Companies/{companyId}/CostCenters/{id}/Deactivate` | Deactivate a cost center |
+| `DELETE /Companies/{companyId}/CostCenters/{id}` | Delete a cost center |
+| `PUT /Companies/{companyId}/FinancialYears/{id}` | Update a financial year |
+| `DELETE /Companies/{companyId}/FinancialYears/{id}` | Delete a financial year |
+| `PUT /Companies/{companyId}/FinancialYears/{id}/Close` | Close a financial year |
+| `POST /Companies/{companyId}/FinancialYears/{id}/Periods/{periodId}/Lock` | Lock a period |
+| `POST /Companies/{companyId}/FinancialYears/{id}/Periods/{periodId}/Close` | Close a period |
+| `POST /Companies/{companyId}/FinancialYears/{id}/Periods/{periodId}/Reopen` | Reopen a period |
+| `PUT /Companies/{companyId}/Journals/{id}` | Update a journal |
+| `POST /Companies/{companyId}/Journals/{id}/Post` | Post a journal |
+| `POST /Companies/{companyId}/Journals/{id}/Void` | Void a journal |
+| `POST /Companies/{companyId}/Journals/{id}/Adjust` | Adjust a journal |
+| `POST /Companies/{companyId}/Journals/{id}/Reverse` | Reverse a journal |
+| `PUT /Companies/{companyId}/Settings` | Update company settings |
+
+---
+
+## What happens when versions conflict
+
+If the version you send no longer matches the current state of the row, the API returns `409 Conflict`:
+
+```json
+{
+  "status": 409,
+  "errors": [
+    {
+      "name": "generalErrors",
+      "reason": "the resource was modified by another request; re-fetch and retry",
+      "code": "Conflict"
+    }
+  ]
+}
+```
+
+This means another write happened between your read and your write. The correct response is to **re-fetch the resource and retry**. Do not retry with the old version.
+
+---
+
+## How to handle a conflict
+
+The pattern is read–modify–write. If the write fails with `500`, start over from the read:
+
+```js
+async function updateJournal(companyId, id, changes, token) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    // 1. Read the current state
+    const getRes = await fetch(
+      `https://api.lilury.com/api/v1/Companies/${companyId}/Journals/${id}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!getRes.ok) throw new Error(`Failed to fetch journal: ${getRes.status}`);
+    const journal = await getRes.json();
+
+    // 2. Apply changes, carry the version forward
+    const payload = { ...journal, ...changes, version: journal.version };
+
+    // 3. Write
+    const putRes = await fetch(
+      `https://api.lilury.com/api/v1/Companies/${companyId}/Journals/${id}`,
+      {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      }
+    );
+
+    if (putRes.ok) return putRes.json();
+
+    // 409 = version conflict, retry from read
+    if (putRes.status === 409 && attempt < 2) continue;
+
+    throw new Error(`Update failed: ${putRes.status}`);
+  }
+}
+```
+
+```python
+import requests
+
+def update_journal(company_id, journal_id, changes, token):
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    base_url = f"https://api.lilury.com/api/v1/Companies/{company_id}/Journals/{journal_id}"
+
+    for attempt in range(3):
+        # 1. Read current state
+        res = requests.get(base_url, headers=headers)
+        res.raise_for_status()
+        journal = res.json()
+
+        # 2. Apply changes, carry version forward
+        payload = {**journal, **changes, "version": journal["version"]}
+
+        # 3. Write
+        res = requests.put(base_url, json=payload, headers=headers)
+        if res.ok:
+            return res.json()
+
+        # 409 = version conflict, retry from read
+        if res.status_code == 409 and attempt < 2:
+            continue
+
+        res.raise_for_status()
+
+    raise Exception("Failed to update after retries")
+```
+
+---
+
+## Combining optimistic locking with idempotency
+
+A write request can be both versioned and idempotent. Use `Idempotency-Key` together with `version`:
+
+```bash
+curl -X POST https://api.lilury.com/api/v1/Companies/{companyId}/Journals/{id}/Post \
+  -H "Authorization: Bearer eyJ..." \
+  -H "Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "Content-Type: application/json" \
+  -d '{ "postingDate": "2026-05-01", "version": 3829174102 }'
+```
+
+If the request succeeds and you retry with the same `Idempotency-Key`, the server returns the original `200` without re-executing the operation — even though the `version` on the row has since changed.
+
+If the request fails with `500` (version conflict), the idempotency key is **not** cached, so you can re-fetch, get the new version, and retry — either with the same key or a new one.
+
+See [Idempotency](/idempotency) for details on key caching and retry behavior.
+
+---
+
+## Common mistakes
+
+**Sending a hardcoded or zero version.** A `version` of `0` will almost always cause a conflict. Always read the resource first and use the `version` from the response.
+
+**Reusing a version after a successful write.** Each successful write advances `xmin`. The version returned in the write response reflects the row's new state. If you need to write again, use the new version — not the one you sent.
+
+**Treating a version conflict as a transient server error.** A `409` from a versioned endpoint means stale data — not an infrastructure failure. Re-fetch and retry rather than waiting and retrying with the same payload.
+
+**Caching the version across user sessions.** If you store a resource version in a cache or database for use later, the row may have changed by the time you write. Re-fetch immediately before every write to get the freshest version.

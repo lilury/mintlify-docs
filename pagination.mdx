@@ -1,0 +1,176 @@
+---
+title: "Pagination"
+description: "How the Lilury API paginates list responses and how to iterate through all results"
+---
+
+# Pagination
+
+All list endpoints in the Lilury API use **cursor-based pagination**. Instead of asking for page 3 of some fixed offset, you pass back the cursor the API gave you to continue from where you left off.
+
+---
+
+## Why cursor pagination
+
+Offset-based pagination (`?page=3&limit=20`) has a known flaw: if items are inserted or deleted between requests, you can see the same item twice or skip one entirely. Cursors encode your exact position in the sorted result set, so the next page always starts at the right item regardless of concurrent writes.
+
+---
+
+## Request parameters
+
+Every list endpoint accepts the following query parameters:
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `page` | string | _(none)_ | Cursor returned by the previous response. Omit to start from the beginning. |
+| `pageSize` | integer | `20` | Number of results per page. Min `1`, max `100`. |
+| `orderBy` | string | endpoint-specific | Field name to sort by. |
+| `orderAsc` | boolean | `false` | `true` for ascending, `false` for descending. |
+| `keyword` | string | _(none)_ | Free-text search term. Max 50 characters. |
+
+Individual endpoints may accept additional filter parameters (date ranges, statuses, etc.) — see the endpoint's own reference.
+
+---
+
+## Response shape
+
+Every paginated endpoint returns this envelope:
+
+```json
+{
+  "currentPage": "WyJ7InQiOiJsIiwidiI6MTc0...",
+  "results": [ ... ],
+  "nextPage": "WyJ7InQiOiJsIiwidiI6MTc0..."
+}
+```
+
+| Field | Description |
+| --- | --- |
+| `currentPage` | The cursor that was used to produce this page (mirrors the `page` you sent, or `null` for the first page). |
+| `results` | Array of items for this page. May be empty. |
+| `nextPage` | Cursor to pass as `page` on the next request. `null` when there are no more results. |
+
+When `nextPage` is `null`, you have reached the end of the result set.
+
+---
+
+## Walking through pages
+
+### First request
+
+Omit the `page` parameter entirely:
+
+```bash
+curl "https://api.lilury.com/api/v1/Companies/{companyId}/Journals?pageSize=50" \
+  -H "Authorization: Bearer eyJ..."
+```
+
+```json
+{
+  "currentPage": null,
+  "results": [ ... ],
+  "nextPage": "WyJ7InQiOiJsIiwidiI6MTc0NjA3MjAwMDAwMH1d"
+}
+```
+
+### Subsequent requests
+
+Pass the `nextPage` value back as `page`:
+
+```bash
+curl "https://api.lilury.com/api/v1/Companies/{companyId}/Journals?pageSize=50&page=WyJ7InQiOiJsIiwidiI6MTc0NjA3MjAwMDAwMH1d" \
+  -H "Authorization: Bearer eyJ..."
+```
+
+Repeat until `nextPage` is `null`.
+
+### Full iteration — JavaScript
+
+```js
+async function fetchAllJournals(companyId, headers) {
+  const results = [];
+  let page = null;
+
+  do {
+    const url = new URL(`https://api.lilury.com/api/v1/Companies/${companyId}/Journals`);
+    url.searchParams.set("pageSize", "100");
+    if (page) url.searchParams.set("page", page);
+
+    const res = await fetch(url, { headers });
+    const data = await res.json();
+
+    results.push(...data.results);
+    page = data.nextPage;
+  } while (page !== null);
+
+  return results;
+}
+```
+
+### Full iteration — Python
+
+```python
+import requests
+
+def fetch_all_journals(company_id, headers):
+    results = []
+    page = None
+
+    while True:
+        params = {"pageSize": 100}
+        if page:
+            params["page"] = page
+
+        res = requests.get(
+            f"https://api.lilury.com/api/v1/Companies/{company_id}/Journals",
+            headers=headers,
+            params=params,
+        )
+        data = res.json()
+        results.extend(data["results"])
+
+        page = data.get("nextPage")
+        if not page:
+            break
+
+    return results
+```
+
+---
+
+## Sorting
+
+Use `orderBy` and `orderAsc` to control the sort order. The available field names are listed in each endpoint's reference. Sort parameters must stay the same across all pages of the same request sequence — changing them mid-sequence produces undefined results.
+
+```bash
+# Most recent journals first (default)
+curl "https://api.lilury.com/api/v1/Companies/{companyId}/Journals?orderBy=Date&orderAsc=false"
+
+# Oldest journals first
+curl "https://api.lilury.com/api/v1/Companies/{companyId}/Journals?orderBy=Date&orderAsc=true"
+```
+
+---
+
+## Cursors are opaque
+
+The `page` and `nextPage` values are **opaque strings**. They encode your position in the result set in a format the API understands. Do not parse, construct, or modify them. Treat them as a black box that you store and send back unchanged.
+
+---
+
+## Page size guidance
+
+The default page size is `20`. The maximum is `100`.
+
+For **interactive UIs**, a page size of 20–50 is usually right — small enough to be fast, large enough to avoid too many round trips.
+
+For **bulk exports or data processing**, use `100` and iterate through all pages in a loop. This minimizes the number of HTTP requests while staying within the limit.
+
+There is no benefit to requesting fewer items than you need in a single page. One request for 100 items is always faster than five requests for 20 items.
+
+---
+
+## Stable results
+
+Cursors produce stable, consistent results within a single pagination sequence. If your filter or sort is unchanged and you iterate from the first page to the last, you will see each matching item exactly once, even if new items are created by concurrent requests while you are iterating.
+
+Cursors do not lock the result set — new items created after your first request may appear on subsequent pages if they fall within your filter. Items deleted between requests will not appear.

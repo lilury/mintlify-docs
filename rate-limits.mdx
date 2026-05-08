@@ -1,0 +1,99 @@
+---
+title: "Rate limits"
+description: "How the Lilury API enforces rate limits and how to handle them"
+---
+
+# Rate limits
+
+The Lilury API limits how many requests a single client IP can make per second. This keeps the API stable and fair for all users.
+
+---
+
+## The limit
+
+| Dimension | Value |
+| --- | --- |
+| Requests per second | 25 |
+| Measured by | Client IP address |
+| Scope | All endpoints |
+
+The window is a rolling one-second window. If you send 25 requests in the first half-second and a 26th arrives before the window resets, it is rejected.
+
+---
+
+## The `429` response
+
+When you exceed the limit, the API returns `429 Too Many Requests`. Unlike most error responses, **the body is empty** — there is no JSON error object.
+
+```text
+HTTP/1.1 429 Too Many Requests
+```
+
+There is no `Retry-After` header. Use a brief fixed pause or exponential backoff before retrying.
+
+---
+
+## Handling a `429`
+
+The correct response to a `429` is to slow down and retry. A safe pattern:
+
+1. Detect the `429` status code.
+2. Wait at least 1 second before retrying.
+3. Resend the original request unchanged.
+4. If you receive another `429`, increase the wait time (exponential backoff).
+
+```js
+async function requestWithRetry(url, options, maxAttempts = 5) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const res = await fetch(url, options);
+
+    if (res.status !== 429) return res;
+
+    const delay = Math.min(1000 * 2 ** attempt, 16000);
+    await new Promise((r) => setTimeout(r, delay));
+  }
+
+  throw new Error("Rate limit exceeded after max retries");
+}
+```
+
+```python
+import time
+import requests
+
+def request_with_retry(url, **kwargs):
+    max_attempts = 5
+    for attempt in range(max_attempts):
+        res = requests.request(**kwargs, url=url)
+        if res.status_code != 429:
+            return res
+        delay = min(1 * 2 ** attempt, 16)
+        time.sleep(delay)
+    raise Exception("Rate limit exceeded after max retries")
+```
+
+---
+
+## Staying within the limit
+
+25 requests per second is more than enough for typical integrations. You are most likely to hit the limit if you are:
+
+- **Bulk importing data** — sending many create requests in a tight loop.
+- **Parallelizing too aggressively** — running many concurrent workers against the same IP.
+- **Polling too frequently** — checking for changes in a tight loop instead of on a schedule.
+
+A few practices that help:
+
+**Batch where possible.** Some endpoints accept arrays of items. One request for ten items costs one request, not ten.
+
+**Add a small delay between bulk requests.** A `50ms` sleep between requests keeps throughput at 20 req/s — well under the limit — with negligible impact on total runtime.
+
+**Use a queue for bulk imports.** Process items from a queue with a controlled concurrency and rate. This decouples the speed of data ingestion from the speed of the API.
+
+**Avoid tight polling loops.** If you need to monitor for changes, poll on a reasonable interval (every few seconds) rather than as fast as possible.
+
+---
+
+## Limits do not reset idempotency keys
+
+Rate limit rejections (`429`) are not cached by the idempotency system. If a request is rejected because of the rate limit, you can retry it with the same `Idempotency-Key` once the rate limit window passes. See [Idempotency](/idempotency) for details.

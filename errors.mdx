@@ -1,0 +1,225 @@
+---
+title: "Errors"
+description: "HTTP status codes and error response format for the Lilury API"
+---
+
+# Errors
+
+The Lilury API uses standard HTTP status codes and returns a consistent error body on every failure. Understanding the error format lets you handle failures gracefully without guessing.
+
+---
+
+## HTTP status codes
+
+| Code | Meaning |
+| --- | --- |
+| `200` | Request succeeded |
+| `400` | Something is wrong with the request — see the error body for details |
+| `401` | Not authenticated — missing or invalid token |
+| `403` | Authenticated but not allowed to perform this action |
+| `409` | A concurrent request with the same `Idempotency-Key` is already in progress, or a version conflict was detected |
+| `429` | Too many requests — you have exceeded the rate limit |
+| `500` | Unexpected server error |
+
+Note that domain-level "not found" errors (e.g. looking up a journal that does not exist) return `400`, not `404`. The error body's `code` field tells you exactly what went wrong.
+
+---
+
+## Error response schema
+
+All errors return a JSON body with this shape:
+
+```json
+{
+  "type": "https://www.rfc-editor.org/rfc/rfc7231",
+  "title": "One or more errors occurred.",
+  "status": 400,
+  "instance": "/api/v1/Companies/01924abc-/Journals",
+  "traceId": "00-3f2a1b...",
+  "errors": [
+    {
+      "name": "generalErrors",
+      "reason": "The journal was not found.",
+      "code": "NotFound"
+    }
+  ]
+}
+```
+
+| Field | Description |
+| --- | --- |
+| `status` | The HTTP status code |
+| `instance` | The request path that produced the error |
+| `traceId` | A unique ID for this request — include it when reporting issues to support |
+| `errors` | Array of one or more error objects (see below) |
+
+### Error object
+
+Each item in the `errors` array has:
+
+| Field | Description |
+| --- | --- |
+| `name` | Which field caused the error, or `"generalErrors"` for non-field errors |
+| `reason` | A human-readable, localized message describing the problem |
+| `code` | A machine-readable error type (see [Error codes](#error-codes) below) |
+
+---
+
+## Error codes
+
+The `code` field tells you the category of the error so you can handle it programmatically, independently of the `reason` message (which may be translated).
+
+| Code | Meaning |
+| --- | --- |
+| `NotFound` | A referenced resource does not exist |
+| `Invalid` | A value is malformed or violates a business rule |
+| `NotAllowed` | The operation is not permitted in the current state |
+| `Duplicated` | A unique constraint was violated |
+| `Missing` | A required value or dependency is absent |
+| `Warning` | The operation was rejected due to a business-level warning |
+| `Unauthorized` | Authentication is required or the provided credentials are invalid |
+| `Forbidden` | The authenticated user does not have permission for this action |
+| `Conflict` | A concurrent request with the same idempotency key is already in progress |
+
+---
+
+## Validation errors vs. business errors
+
+There are two distinct kinds of `400` errors.
+
+**Validation errors** occur when the request body itself is malformed — a required field is missing, a string is too long, a date is invalid, etc. They are caught before any business logic runs. The `name` field identifies the specific field that failed:
+
+```json
+{
+  "status": 400,
+  "errors": [
+    {
+      "name": "name",
+      "reason": "'Name' must not be empty.",
+      "code": "NotEmptyValidator",
+      "severity": "Error"
+    },
+    {
+      "name": "expiresAt",
+      "reason": "Expiry date must be in the future.",
+      "code": "PredicateValidator",
+      "severity": "Error"
+    }
+  ]
+}
+```
+
+**Business errors** occur when the request is structurally valid but violates a domain rule — for example, trying to post a journal that is already posted. The `name` field is always `"generalErrors"`:
+
+```json
+{
+  "status": 400,
+  "errors": [
+    {
+      "name": "generalErrors",
+      "reason": "This journal has already been posted.",
+      "code": "NotAllowed"
+    }
+  ]
+}
+```
+
+---
+
+## Authentication errors
+
+A `401` response means the request was not authenticated. This happens when:
+
+- The `Authorization` header is missing
+- The access token has expired
+- The API key has been revoked or expired
+
+```json
+{
+  "status": 401,
+  "errors": [
+    {
+      "name": "generalErrors",
+      "reason": "Authentication is required.",
+      "code": "Unauthorized"
+    }
+  ]
+}
+```
+
+When you receive a `401` with a user token, use your refresh token to get a new access token and retry the request. See [Authentication](/authentication) for details.
+
+---
+
+## Permission errors
+
+A `403` response means you are authenticated but the token or API key does not have the required permission for this endpoint.
+
+```json
+{
+  "status": 403,
+  "errors": [
+    {
+      "name": "generalErrors",
+      "reason": "You do not have permission to perform this action.",
+      "code": "Forbidden"
+    }
+  ]
+}
+```
+
+Check that the permission required by the endpoint is included in your token's company permissions or your API key's permission list.
+
+---
+
+## Conflict errors
+
+A `409` response has two distinct causes.
+
+**Idempotency conflict** — a request with the same `Idempotency-Key` is currently being processed. Wait briefly and retry; once the first request completes, a retry with the same key will return the original response instead of re-executing the operation.
+
+```json
+{
+  "status": 409,
+  "errors": [
+    {
+      "name": "generalErrors",
+      "reason": "a request with this idempotency key is already in progress",
+      "code": "Conflict"
+    }
+  ]
+}
+```
+
+If the first request completed successfully and you retry with the same `Idempotency-Key`, you will receive the original `200` response without the operation being executed again. See [Idempotency](/idempotency) for details.
+
+**Version conflict** — the resource was modified by another request between your read and your write. Re-fetch the resource to get the current `version` and retry.
+
+```json
+{
+  "status": 409,
+  "errors": [
+    {
+      "name": "generalErrors",
+      "reason": "the resource was modified by another request; re-fetch and retry",
+      "code": "Conflict"
+    }
+  ]
+}
+```
+
+See [Concurrency](/concurrency) for details on how to use the `version` field.
+
+---
+
+## Rate limit errors
+
+A `429` response means your client IP has exceeded 25 requests per second. Slow down and retry after a brief pause.
+
+The response body is empty — no error object is returned.
+
+---
+
+## Server errors
+
+A `500` response means something went wrong on our end. The body will be empty. Record the request's `traceId` from a preceding error response if available, and contact support.

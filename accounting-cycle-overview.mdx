@@ -1,0 +1,125 @@
+---
+title: "Accounting Cycle Overview"
+description: "How financial years, periods, journals, and closures work in Lilury"
+---
+
+# Accounting Cycle Overview
+
+This document walks through the full accounting lifecycle in Lilury — from setting up a financial year to closing it out and opening the next one.
+
+---
+
+## Financial years and periods
+
+Everything in Lilury's accounting module is anchored to a **financial year**. A financial year defines the date range your books cover — commonly January–December, but it can start on any month depending on your organisation's fiscal calendar.
+
+When you create a financial year, Lilury automatically generates **accounting periods** within it. By default these are monthly (12 periods per year), but the exact breakdown is determined by the configuration you supply. Each period has:
+
+- A sequential number (e.g. Period 1, Period 2 … Period 12)
+- A start date and end date
+- A status — **open**, **locked**, or **closed**
+
+Periods are the buckets that journal entries are posted into. Every transaction must fall within an open period.
+
+---
+
+## Journal entries
+
+A **journal entry** is the core unit of accounting in Lilury. It records a financial event as one or more debit/credit lines that must balance to zero.
+
+### Statuses
+
+| Status | Meaning |
+| --- | --- |
+| **Draft** | The entry has been saved but not yet posted. It has no effect on balances or reports. You can edit or void a draft freely. |
+| **Posted** | The entry has been committed to the ledger. It affects balances and appears in financial reports. Financial data (amounts, accounts, dates) cannot be changed, but non-financial metadata can be updated. |
+| **Void** | A draft entry that has been cancelled before posting. It is removed from the active ledger but remains in the audit trail. |
+| **Reversed** | A posted entry that has been corrected. Lilury creates an automatic counter-entry that zeroes out the original. Both the original and the reversing entry remain in the audit trail. |
+
+### Voiding vs. reversals
+
+- **Void** applies only to **draft** entries. It cancels the entry before it ever reaches the ledger — no financial impact has occurred, so no counter-entry is needed.
+- **Reversal** applies only to **posted** entries. Because the entry has already affected balances, Lilury creates a mirror entry with debits and credits swapped to neutralise the effect. You can then post a corrected entry.
+
+### Editing posted entries
+
+A posted entry's financial data — line amounts, account codes, dates, currency — is immutable because changing it would silently alter reported figures. You can, however, update non-financial metadata (such as description, reference, or tags) on a posted entry without affecting any balances or reports.
+
+### Posting rules
+
+- You can only post a journal entry into a period that is currently **open**.
+- To correct a posted entry, reverse it and post a new one.
+- Reversing a posted entry in a **locked** period is not allowed — you must reopen the period first (see below).
+
+---
+
+## Period locking, reopening, and closing
+
+Periods move through a lifecycle to prevent accidental changes to finalised data.
+
+### Open
+
+The default state. Journal entries can be created, edited (if still in draft), posted, and voided freely within an open period.
+
+### Locked
+
+Locking a period prevents any new journal entries from being posted into it. Existing posted entries remain intact. Locking is a lightweight control — useful during month-end review when you want to stop new postings while reconciliation is still in progress.
+
+A locked period can be **reopened** (returned to Open) if you discover an error that must be corrected before formal closure.
+
+### Closed
+
+Closing a period is a permanent, irreversible action. No entries can be posted into a closed period, and it cannot be reopened. Close a period only once all reconciliation and review is complete and signed off.
+
+---
+
+## Month-end (period-end) closure
+
+The month-end process is the routine you run at the end of each accounting period to finalise that period's books. The typical sequence is:
+
+1. **Post all remaining entries** — ensure every transaction for the period has been posted. Drafts that are not posted will be excluded from reports.
+2. **Reconcile** — compare ledger balances against bank statements, sub-ledgers, and other external sources. Investigate and resolve any discrepancies.
+3. **Lock the period** — once you are satisfied with the numbers, lock the period to prevent further postings while final review happens.
+4. **Final review and sign-off** — management or finance leadership reviews the period's reports.
+5. **Close the period** — after sign-off, close the period permanently. The books for that period are now sealed.
+
+Repeating this process each month keeps the general ledger clean and makes year-end significantly easier.
+
+---
+
+## Year-end closure
+
+When all periods of a financial year have been closed, you can perform the **financial year-end closure**. This step:
+
+- Marks the financial year itself as closed
+- Calculates the net profit or loss for the year (revenue minus expenses)
+- Transfers that net result to **retained earnings** (or the equivalent equity account) via an automatic closing entry
+- Resets income and expense account balances to zero, ready for the new year
+
+This closing entry is the accounting equivalent of "zeroing out" the profit and loss accounts so they start fresh in the next year. Balance sheet accounts (assets, liabilities, equity) carry their closing balances forward automatically.
+
+---
+
+## Opening the next financial year
+
+After closing the current year, you create the **next financial year** in Lilury. Lilury will:
+
+1. Generate a new set of periods for the new year
+2. Carry forward all balance sheet balances as opening balances in the new year
+3. Start income and expense account balances at zero (they were reset by the year-end closing entry)
+
+The new financial year opens in the normal state, and the cycle begins again: post journals, lock and close periods month by month, and eventually close the year.
+
+---
+
+## Summary
+
+```text
+Create financial year
+  └─ Periods generated automatically (monthly by default)
+       └─ Post journal entries (Draft → Posted; or Void if correction needed)
+            └─ Month-end: reconcile → lock → review → close period
+                 └─ (repeat for each period)
+                      └─ Year-end: close year → transfer net result to retained earnings
+                           └─ Open next financial year → carry forward balances → cycle repeats
+```
