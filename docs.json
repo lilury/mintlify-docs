@@ -49,8 +49,8 @@
     ],
     "primary": {
       "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
+      "label": "Lilury",
+      "href": "https://lilury.com"
     }
   },
   "contextual": {
