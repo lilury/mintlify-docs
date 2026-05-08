@@ -17,9 +17,8 @@
         "tab": "Guides",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "General",
             "pages": [
-              "accounting-cycle-overview",
               "authentication",
               "errors",
               "idempotency",
@@ -27,6 +26,13 @@
               "concurrency",
               "pagination",
               "external-ids"
+            ]
+          },
+          {
+            "group": "Accounting",
+            "pages": [
+              "accounting-cycle-overview",
+              "accounts"
             ]
           }
         ]

@@ -1,0 +1,391 @@
+---
+title: "Accounts"
+description: "A full reference to the Account object — its properties, types, hierarchy rules, and defaults"
+---
+
+# Account
+
+An **account** is the fundamental building block of your chart of accounts. Every journal entry line posts to an account. Accounts form a tree — parent accounts act as categories that group their children, while leaf accounts hold the actual balances.
+
+---
+
+## Object overview
+
+```json
+{
+  "id": "e3a2f1b0-...",
+  "name": {
+    "arabic": "الإيرادات",
+    "english": "Revenue"
+  },
+  "code": "4",
+  "path": "4",
+  "currency": "USD",
+  "type": {
+    "key": "Credit",
+    "value": "Credit"
+  },
+  "isCategory": true,
+  "parentAccount": null,
+  "version": 1027483920
+}
+```
+
+---
+
+## Properties
+
+### `id`
+
+**Type:** `string (UUID)`
+
+The unique identifier of the account. Assigned by the server when the account is created. Use this value wherever the API requires an account reference.
+
+```json
+{ "id": "e3a2f1b0-4c8d-11ef-9b2a-0242ac130003" }
+```
+
+---
+
+### `name`
+
+**Type:** `object`
+
+The display name of the account. `name` is a bilingual object with two fields:
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `arabic` | Yes | The Arabic name of the account |
+| `english` | No | The optional English name of the account |
+
+```json
+{
+  "name": {
+    "arabic": "المبيعات",
+    "english": "Sales"
+  }
+}
+```
+
+The API always returns both fields. When `english` was not provided at creation time, it comes back as `null`.
+
+In list and dropdown responses, `name` is returned as a single localised string (not the full object) — the server picks the language based on the `Accept-Language` header of the request.
+
+---
+
+### `code`
+
+**Type:** `string`
+
+A short numeric identifier for the account within its parent. Codes are digits only and at most 6 characters long.
+
+```json
+{ "code": "101" }
+```
+
+**Auto-generation.** If you omit `code` when creating an account, the server assigns the next available integer under the parent. For example, if a parent already has children with codes `1`, `2`, and `3`, the next account gets code `4`.
+
+**Uniqueness.** Codes are unique within a parent — two siblings cannot share the same code. Codes across different parents are independent and may repeat.
+
+**Full account number.** The code you see on a single account is its local segment. To get the full account number (as shown in your chart of accounts), read the `path` field.
+
+---
+
+### `path`
+
+**Type:** `string`
+
+The full hierarchical position of the account, expressed as the chain of codes from the root down to this account, separated by dots.
+
+```text
+1
+1.1
+1.1.2
+1.1.2.05
+```
+
+`path` is computed by the server and is read-only. You never set it directly.
+
+**Example tree:**
+
+```text
+1          ← Assets  (path: "1")
+  1.1      ← Current Assets  (path: "1.1")
+    1.1.1  ← Cash  (path: "1.1.1")
+    1.1.2  ← Accounts Receivable  (path: "1.1.2")
+  1.2      ← Fixed Assets  (path: "1.2")
+```
+
+In list responses, trailing dot segments are trimmed so the path always ends at the account's own code — it will never have a trailing dot.
+
+---
+
+### `currency`
+
+**Type:** `string (ISO 4217)`
+
+The currency code this account is denominated in (e.g. `"USD"`, `"SAR"`, `"EUR"`).
+
+```json
+{ "currency": "USD" }
+```
+
+**Defaulting.** When you create an account without specifying a currency, the server inherits the currency from the parent account. If the parent also has no explicit currency, it falls back to the company's default currency.
+
+Once set, the currency of an account cannot be changed through normal updates — it is fixed at creation time.
+
+---
+
+### `type`
+
+**Type:** `object (KeyValueItem)`
+
+Indicates whether the account's natural balance is a **debit** or a **credit**. In list responses this is returned as a `KeyValueItem` with `key` and `value`:
+
+```json
+{
+  "type": {
+    "key": "Debit",
+    "value": "Debit"
+  }
+}
+```
+
+The two possible values:
+
+| Key | Meaning |
+| --- | --- |
+| `Debit` | The account increases with debits and decreases with credits (e.g. assets, expenses) |
+| `Credit` | The account increases with credits and decreases with debits (e.g. liabilities, equity, revenue) |
+
+**Defaulting.** If you omit `type` when creating an account, the server inherits the type from the parent account.
+
+**Root accounts.** The five default root category accounts have their types set automatically based on their nature and cannot be changed.
+
+---
+
+### `accountNature`
+
+**Type:** `string (enum)`
+
+The accounting classification of the account. This determines where the account appears on financial statements.
+
+| Value | Statement | Default type |
+| --- | --- | --- |
+| `Assets` | Balance Sheet | Debit |
+| `Liabilities` | Balance Sheet | Credit |
+| `Equity` | Balance Sheet | Credit |
+| `Revenue` | Income Statement | Credit |
+| `Expenses` | Income Statement | Debit |
+
+`accountNature` is inherited from an account's root ancestor and cannot differ within a branch of the tree. All accounts under the `Assets` root are `Assets`; all accounts under the `Expenses` root are `Expenses`, and so on.
+
+This field is not directly settable — it is resolved from the root category you attach the account to.
+
+---
+
+### `isCategory`
+
+**Type:** `boolean`
+
+Marks whether this account is a **category** (branch) or a **leaf** (posting account).
+
+| `isCategory` | Meaning |
+| --- | --- |
+| `true` | This account is a grouping container. It cannot receive journal entry lines directly. Child accounts are created under it. |
+| `false` | This account is a posting account. Journal entries post to it. It cannot have children. |
+
+```json
+{ "isCategory": true }
+```
+
+**Business rule:** when creating a child account, `parentAccountId` must point to an account with `isCategory: true`. Attempting to create a child under a leaf account returns a validation error.
+
+**Simple example:**
+
+```text
+Revenue (isCategory: true)
+  ├── Product Sales (isCategory: false)  ← journal entries post here
+  └── Service Revenue (isCategory: false)  ← journal entries post here
+```
+
+---
+
+### `parentAccount`
+
+**Type:** `object | null`
+
+A summary of the immediate parent account. Present when the account has a parent; `null` for the five default root accounts.
+
+```json
+{
+  "parentAccount": {
+    "id": "a1b2c3d4-...",
+    "name": "Current Assets",
+    "path": "1.1"
+  }
+}
+```
+
+The object contains `id`, `name` (localised string), and `path`.
+
+To specify a parent when creating an account, pass `parentAccountId` in the request body.
+
+---
+
+### `version`
+
+**Type:** `uint`
+
+The concurrency token for this account. Include it verbatim in update and delete requests to prevent lost updates.
+
+```json
+{ "version": 3829174102 }
+```
+
+The server rejects a write if the version you send no longer matches the current row — this means another writer modified the account between your read and your write. Re-fetch the account and retry.
+
+See [Concurrency](/concurrency) for a full explanation of how optimistic locking works.
+
+---
+
+## Default root accounts
+
+When a company is created, Lilury automatically generates five root category accounts. These represent the five fundamental accounting classifications:
+
+| Code | Arabic name | English name | Nature | Type |
+| --- | --- | --- | --- | --- |
+| `1` | الأصول | Assets | Assets | Debit |
+| `2` | الخصوم | Liabilities | Liabilities | Credit |
+| `3` | حقوق الملكية | Equity | Equity | Credit |
+| `4` | الإيرادات | Revenue | Revenue | Credit |
+| `5` | المصاريف | Expenses | Expenses | Debit |
+
+These accounts are `isCategory: true`, have no parent, and cannot be updated or deleted. All accounts you create are descendants of one of these five roots.
+
+---
+
+## Hierarchy rules
+
+Accounts form a tree. Several rules govern how that tree is structured:
+
+**Maximum depth.** An account can be at most 7 levels deep (counting the root as level 1). Trying to create an account at level 8 or below returns an error.
+
+**Parent must be a category.** You can only create a child under an account whose `isCategory` is `true`. Leaf accounts cannot have children.
+
+**Nature consistency.** All accounts in a branch inherit the same `accountNature` as the root of that branch. You cannot attach an account to a parent from a different nature.
+
+**No deletion when children exist.** An account with child accounts cannot be deleted. Remove the children first.
+
+**No deletion when entries exist.** An account that has journal entry lines posted to it cannot be deleted.
+
+A typical 4-level structure looks like this:
+
+```text
+1 — Assets  (root category, level 1)
+  1.1 — Current Assets  (category, level 2)
+    1.1.1 — Cash  (category, level 3)
+      1.1.1.01 — Petty Cash  (leaf, level 4)  ← journal entries post here
+      1.1.1.02 — Bank Account  (leaf, level 4)  ← journal entries post here
+```
+
+---
+
+## Creating an account
+
+**Minimum required fields:**
+
+```json
+{
+  "companyId": "...",
+  "parentAccountId": "...",
+  "name": {
+    "arabic": "النقدية"
+  },
+  "isCategory": false
+}
+```
+
+**With optional fields:**
+
+```json
+{
+  "companyId": "...",
+  "parentAccountId": "...",
+  "name": {
+    "arabic": "النقدية",
+    "english": "Cash"
+  },
+  "isCategory": false,
+  "code": "01",
+  "currency": "USD",
+  "type": "Debit"
+}
+```
+
+Fields you can omit and what the server does instead:
+
+| Field | Default when omitted |
+| --- | --- |
+| `code` | Auto-assigned as the next integer under the parent |
+| `currency` | Inherited from the parent account, then the company default |
+| `type` | Inherited from the parent account |
+
+---
+
+## Updating an account
+
+Pass the `id`, the current `version`, and any fields you want to change. Fields not included in the request are left unchanged.
+
+```json
+{
+  "id": "e3a2f1b0-...",
+  "companyId": "...",
+  "parentAccountId": "...",
+  "name": {
+    "arabic": "النقدية",
+    "english": "Cash and Cash Equivalents"
+  },
+  "isCategory": false,
+  "version": 3829174102
+}
+```
+
+The response includes a new `version` — use it for any subsequent writes to this account.
+
+---
+
+## Deleting an account
+
+Pass the `id`, `companyId`, and current `version`:
+
+```json
+{
+  "id": "e3a2f1b0-...",
+  "companyId": "...",
+  "version": 3829174102
+}
+```
+
+Deletion fails if:
+
+- The account has child accounts
+- The account has journal entry lines posted to it
+- The account is one of the five default root accounts
+
+---
+
+## Common errors
+
+| Error code | Meaning |
+| --- | --- |
+| `NotFound_Account` | No account with the given `id` exists under the company |
+| `NotFound_ParentAccount` | The `parentAccountId` does not exist |
+| `Account_ParentNotCategory` | The parent account has `isCategory: false` |
+| `Account_NatureMismatch` | The account would belong to a different nature branch than its parent |
+| `Account_MaxDepthExceeded` | Adding this account would exceed the 7-level depth limit |
+| `Account_CodeDigitsOnly` | The `code` value contains non-digit characters |
+| `Account_HasChildren` | Deletion blocked — account has child accounts |
+| `Account_HasEntries` | Deletion blocked — account has posted journal entries |
+| `Account_CannotDeleteRoot` | The account is a default root and cannot be deleted |
+| `Account_CannotUpdateRoot` | The account is a default root and cannot be updated |
