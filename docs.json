@@ -19,14 +19,14 @@
           {
             "group": "Getting started",
             "pages": [
+              "accounting-cycle-overview",
               "authentication",
               "errors",
               "idempotency",
               "rate-limits",
               "concurrency",
               "pagination",
-              "external-ids",
-              "accounting-cycle-overview"
+              "external-ids"
             ]
           }
         ]
